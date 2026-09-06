@@ -12,7 +12,7 @@ session_string = os.environ['TELEGRAM_SESSION']
 channel_id = 'aditya_ranjan_maths_vidyagramm'
 
 # The path where GitHub Actions will mount your Google Drive
-save_path = '/content/drive/MyDrive/Telegram_Archive/GK-GS/parmar ssc/'
+save_path = '/content/drive/MyDrive/Telegram_Archive/maths/vidya gram/'
 os.makedirs(save_path, exist_ok=True)
 
 async def main():
