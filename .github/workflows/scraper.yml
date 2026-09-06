@@ -10,10 +10,10 @@ jobs:
     
     # Pass our hidden secrets into the server environment
     env:
-      API_ID: ${{ secrets.API_ID }}
-      API_HASH: ${{ secrets.API_HASH }}
-      TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
-      RCLONE_CONF_JSON: ${{ secrets.RCLONE_CONF }}
+      API_ID: ${{ vars.API_ID }}
+      API_HASH: ${{ vars.API_HASH }}
+      TELEGRAM_SESSION: ${{ vars.TELEGRAM_SESSION }}
+      RCLONE_CONF_JSON: ${{ vars.RCLONE_CONF }}
 
     steps:
       - name: Checkout Code
