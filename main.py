@@ -9,7 +9,7 @@ api_id = int(os.environ['API_ID'])
 api_hash = os.environ['API_HASH']
 session_string = os.environ['TELEGRAM_SESSION']
 
-channel_id = -3708183148
+channel_id = -1003708183148
 
 # The path where GitHub Actions will mount your Google Drive
 save_path = '/content/drive/MyDrive/Telegram_Archive/GK-GS/parmar ssc/'
