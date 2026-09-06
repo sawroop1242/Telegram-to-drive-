@@ -18,7 +18,7 @@ os.makedirs(save_path, exist_ok=True)
 
 # Google Drive path checked via Rclone (Must match your .yml path)
 # Format: "remote_name:folder/path"
-remote_drive_path = "mydrive:Telegram_Archive/GK-GS/parmar_ssc/"
+remote_drive_path = "gdrive:Telegram_Archive/GK-GS/parmar_ssc/"
 
 def get_already_downloaded_files():
     """Queries Google Drive using Rclone to get a list of all existing files."""
