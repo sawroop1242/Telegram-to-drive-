@@ -26,7 +26,7 @@ ARCHIVE_ROOT = Path("./downloads/Telegram_Archive/GK-GS")
 
 MAX_RETRIES = 5
 RETRY_DELAY = 5
-DOWNLOAD_DELAY = 1
+DOWNLOAD_DELAY = 0
 
 # 0 = unlimited
 MAX_FILES = 0
@@ -53,14 +53,24 @@ logger = logging.getLogger("telegram_archive")
 # ============================================================
 
 SUBJECT_MAP = {
-    
+    "Ancient_History": [
+        "ancient history", "ancient_history", "ancienthistory", "प्राचीन इतिहास",
+    ],
     "Medieval_History": [
         "medieval history", "medieval_history", "medievalhistory", "मध्यकालीन इतिहास",
     ],
     "Modern_History": [
         "modern history", "modern_history", "modernhistory", "आधुनिक इतिहास",
     ],
-    
+    "Polity": [
+        "polity", "indian polity", "constitution", "constitutional", "राजव्यवस्था", "संविधान",
+    ],
+    "Geography": [
+        "geography", "geo", "भूगोल",
+    ],
+    "Economics": [
+        "economics", "economy", "indian economy", "अर्थशास्त्र", "अर्थव्यवस्था",
+    ],
     "Physics": [
         "physics", "भौतिक विज्ञान",
     ],
@@ -263,22 +273,30 @@ class DownloadProgress:
 
 async def download_file(client, message, output_path):
     filename = output_path.name
+    temp_path = output_path.with_name(output_path.name + ".part")
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
+            if temp_path.exists():
+                temp_path.unlink()
+
             logger.info("Download attempt %d/%d: %s", attempt, MAX_RETRIES, filename)
             await client.download_media(
                 message,
-                file=str(output_path),
+                file=str(temp_path),
                 progress_callback=DownloadProgress(filename),
             )
 
-            if not output_path.exists():
-                raise RuntimeError("Download completed but file does not exist.")
+            if not temp_path.exists():
+                raise RuntimeError("Download completed but temporary file does not exist.")
 
-            size = output_path.stat().st_size
+            size = temp_path.stat().st_size
             if size <= 0:
                 raise RuntimeError("Downloaded file is empty.")
+
+            # Atomic rename: the uploader only sees the final filename after
+            # the Telegram download has completely finished.
+            temp_path.replace(output_path)
 
             logger.info("SUCCESS: %s (%.2f MB)", filename, size / 1024 / 1024)
             return True
@@ -302,9 +320,9 @@ async def download_file(client, message, output_path):
             if attempt < MAX_RETRIES:
                 await asyncio.sleep(RETRY_DELAY)
 
-        if output_path.exists():
+        if temp_path.exists():
             try:
-                output_path.unlink()
+                temp_path.unlink()
             except Exception:
                 pass
 
