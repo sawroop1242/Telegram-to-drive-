@@ -909,4 +909,388 @@ async def process_message(
             manifest_key
         ] = {
             "message_id": int(message_id),
-         
+            "subject": subject,
+            "file_type": file_type,
+            "filename": filename,
+            "path": str(output_path),
+            "status": "downloaded",
+        }
+
+        save_manifest(manifest)
+
+        return "already_done"
+
+    # --------------------------------------------------------
+    # Download
+    # --------------------------------------------------------
+
+    success = await download_file(
+        client=client,
+        message=message,
+        destination=destination,
+        filename=filename,
+    )
+
+    if success:
+
+        manifest[
+            manifest_key
+        ] = {
+            "message_id": int(message_id),
+            "subject": subject,
+            "file_type": file_type,
+            "filename": filename,
+            "path": str(output_path),
+            "status": "downloaded",
+        }
+
+        save_manifest(
+            manifest
+        )
+
+        return "downloaded"
+
+    return "failed"
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+async def main():
+
+    global shutdown_requested
+
+    logger.info("=" * 70)
+    logger.info(
+        "Telegram Archive Downloader"
+    )
+    logger.info("=" * 70)
+
+    logger.info(
+        "Channel ID : %s",
+        CHANNEL_ID,
+    )
+
+    logger.info(
+        "Archive    : %s",
+        ARCHIVE_ROOT.resolve(),
+    )
+
+    logger.info(
+        "Max retry  : %s",
+        MAX_RETRIES,
+    )
+
+    logger.info(
+        "Only match : %s",
+        ONLY_MATCHED_FILES,
+    )
+
+    logger.info(
+        "Subjects   : %d",
+        len(
+            set(
+                SUBJECT_MAP.values()
+            )
+        ),
+    )
+
+    # --------------------------------------------------------
+    # Prepare directories
+    # --------------------------------------------------------
+
+    ARCHIVE_ROOT.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    manifest = load_manifest()
+
+    # --------------------------------------------------------
+    # Telegram client
+    # --------------------------------------------------------
+
+    client = TelegramClient(
+        StringSession(
+            TELEGRAM_SESSION
+        ),
+        API_ID,
+        API_HASH,
+    )
+
+    try:
+
+        logger.info(
+            "Connecting to Telegram..."
+        )
+
+        await client.connect()
+
+        if not await client.is_user_authorized():
+
+            logger.error(
+                "Telegram session is not authorized."
+            )
+
+            return
+
+        logger.info(
+            "Telegram authorization successful."
+        )
+
+        # ----------------------------------------------------
+        # Resolve target
+        # ----------------------------------------------------
+
+        entity = await client.get_entity(
+            CHANNEL_ID
+        )
+
+        target_name = getattr(
+            entity,
+            "title",
+            None,
+        )
+
+        if not target_name:
+
+            target_name = getattr(
+                entity,
+                "username",
+                None,
+            )
+
+        if not target_name:
+            target_name = str(
+                CHANNEL_ID
+            )
+
+        logger.info(
+            "Target resolved: %s",
+            target_name,
+        )
+
+        # ----------------------------------------------------
+        # Counters
+        # ----------------------------------------------------
+
+        scanned = 0
+        downloaded = 0
+        skipped = 0
+        already_done = 0
+        failed = 0
+
+        # ----------------------------------------------------
+        # Scan
+        # ----------------------------------------------------
+
+        logger.info(
+            "Scanning messages..."
+        )
+
+        async for message in client.iter_messages(
+            entity,
+            reverse=True,
+        ):
+
+            if shutdown_requested:
+
+                logger.warning(
+                    "Stopping scan..."
+                )
+
+                break
+
+            scanned += 1
+
+            # ------------------------------------------------
+            # MAX FILES
+            # ------------------------------------------------
+
+            if (
+                MAX_FILES > 0
+                and downloaded >= MAX_FILES
+            ):
+                logger.info(
+                    "MAX_FILES reached: %d",
+                    MAX_FILES,
+                )
+
+                break
+
+            # ------------------------------------------------
+            # File type
+            # ------------------------------------------------
+
+            file_type = detect_file_type(
+                message
+            )
+
+            if file_type is None:
+                continue
+
+            # ------------------------------------------------
+            # SUBJECT CHECK BEFORE DOWNLOAD
+            # ------------------------------------------------
+
+            subject = classify_subject(
+                message
+            )
+
+            if subject is None:
+
+                filename = ""
+
+                if getattr(
+                    message,
+                    "file",
+                    None,
+                ):
+
+                    filename = (
+                        getattr(
+                            message.file,
+                            "name",
+                            "",
+                        )
+                        or ""
+                    )
+
+                logger.info(
+                    "[%d] SKIP [NO ALLOWED SUBJECT] "
+                    "[%s] %s",
+                    scanned,
+                    file_type,
+                    filename or f"message_{message.id}",
+                )
+
+                skipped += 1
+
+                continue
+
+            # ------------------------------------------------
+            # Filename
+            # ------------------------------------------------
+
+            filename = build_filename(
+                message,
+                file_type,
+            )
+
+            logger.info(
+                "[%d] [%s] [%s] %s",
+                scanned,
+                subject,
+                file_type,
+                filename,
+            )
+
+            # ------------------------------------------------
+            # Process
+            # ------------------------------------------------
+
+            result = await process_message(
+                client,
+                message,
+                manifest,
+            )
+
+            if result == "downloaded":
+                downloaded += 1
+
+            elif result == "already_done":
+                already_done += 1
+
+            elif result == "skipped":
+                skipped += 1
+
+            elif result == "failed":
+                failed += 1
+
+            # ------------------------------------------------
+            # Delay
+            # ------------------------------------------------
+
+            if DOWNLOAD_DELAY > 0:
+
+                await asyncio.sleep(
+                    DOWNLOAD_DELAY
+                )
+
+        # ----------------------------------------------------
+        # Summary
+        # ----------------------------------------------------
+
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info(
+            "DOWNLOAD SUMMARY"
+        )
+        logger.info("=" * 70)
+
+        logger.info(
+            "Messages scanned : %d",
+            scanned,
+        )
+
+        logger.info(
+            "Downloaded       : %d",
+            downloaded,
+        )
+
+        logger.info(
+            "Already complete  : %d",
+            already_done,
+        )
+
+        logger.info(
+            "Skipped           : %d",
+            skipped,
+        )
+
+        logger.info(
+            "Failed            : %d",
+            failed,
+        )
+
+        logger.info("=" * 70)
+
+    except Exception as exc:
+
+        logger.exception(
+            "Fatal error: %s",
+            exc,
+        )
+
+        raise
+
+    finally:
+
+        if client.is_connected():
+
+            logger.info(
+                "Disconnecting from Telegram..."
+            )
+
+            await client.disconnect()
+
+        logger.info(
+            "Telegram downloader stopped."
+        )
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+
+    try:
+        asyncio.run(main())
+
+    except KeyboardInterrupt:
+
+        logger.warning(
+            "Interrupted by user."
+        )
