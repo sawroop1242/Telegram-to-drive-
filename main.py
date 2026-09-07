@@ -4,6 +4,7 @@ import logging
 import mimetypes
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,10 +24,12 @@ TELEGRAM_SESSION = os.environ["TELEGRAM_SESSION"]
 CHANNEL_ID = -1003708183148
 
 ARCHIVE_ROOT = Path("./downloads/Telegram_Archive/GK-GS")
+RCLONE_REMOTE_ROOT = os.environ.get("RCLONE_REMOTE_ROOT", "gdrive1:Telegram_Archive/GK-GS")
 
 MAX_RETRIES = 5
 RETRY_DELAY = 5
 DOWNLOAD_DELAY = 0
+UPLOAD_RETRIES = 3
 
 # 0 = unlimited
 MAX_FILES = 0
@@ -242,6 +245,14 @@ def get_destination(subject, file_type):
     return None
 
 
+def get_remote_destination(subject, file_type):
+    if file_type == "VIDEO":
+        return f"{RCLONE_REMOTE_ROOT}/{subject}/Videos"
+    if file_type == "PDF":
+        return f"{RCLONE_REMOTE_ROOT}/{subject}/PDFs"
+    return None
+
+
 # ============================================================
 # PROGRESS
 # ============================================================
@@ -331,6 +342,72 @@ async def download_file(client, message, output_path):
 
 
 # ============================================================
+# IMMEDIATE GOOGLE DRIVE UPLOAD
+# ============================================================
+
+async def upload_to_drive(output_path, subject, file_type):
+    """Upload one completed file immediately after its Telegram download."""
+    remote_destination = get_remote_destination(subject, file_type)
+    if not remote_destination:
+        logger.error("No Google Drive destination for %s / %s", subject, file_type)
+        return False
+
+    for attempt in range(1, UPLOAD_RETRIES + 1):
+        try:
+            logger.info(
+                "Uploading immediately to Google Drive: %s -> %s",
+                output_path.name,
+                remote_destination,
+            )
+
+            command = [
+                "rclone",
+                "copyto",
+                str(output_path),
+                f"{remote_destination}/{output_path.name}",
+                "--retries",
+                "3",
+                "--low-level-retries",
+                "10",
+                "--drive-chunk-size",
+                "64M",
+            ]
+
+            result = await asyncio.to_thread(
+                subprocess.run,
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            if result.returncode == 0:
+                logger.info("DRIVE UPLOAD SUCCESS: %s", output_path.name)
+                return True
+
+            logger.warning(
+                "Google Drive upload failed (attempt %d/%d): %s",
+                attempt,
+                UPLOAD_RETRIES,
+                result.stderr.strip() or result.stdout.strip() or "rclone failed",
+            )
+
+        except Exception as exc:
+            logger.warning(
+                "Google Drive upload error (attempt %d/%d): %s",
+                attempt,
+                UPLOAD_RETRIES,
+                exc,
+            )
+
+        if attempt < UPLOAD_RETRIES:
+            await asyncio.sleep(RETRY_DELAY)
+
+    logger.error("DRIVE UPLOAD FAILED: %s", output_path.name)
+    return False
+
+
+# ============================================================
 # PROCESS MESSAGE
 # ============================================================
 
@@ -378,16 +455,22 @@ async def process_message(client, message, manifest):
     if not success:
         return "FAILED"
 
+    # IMPORTANT: upload immediately after the Telegram download completes.
+    # main.py never checks Google Drive for file existence.
+    upload_success = await upload_to_drive(output_path, subject, file_type)
+    if not upload_success:
+        return "FAILED_UPLOAD"
+
     manifest[message_key] = {
         "filename": filename,
         "subject": subject,
         "file_type": file_type,
-        "status": "downloaded",
+        "status": "downloaded_and_uploaded",
     }
     save_manifest(manifest)
 
     await asyncio.sleep(DOWNLOAD_DELAY)
-    return "DOWNLOADED"
+    return "DOWNLOADED_UPLOADED"
 
 
 # ============================================================
@@ -400,11 +483,12 @@ async def main():
     logger.info("=" * 70)
     logger.info("Channel ID : %s", CHANNEL_ID)
     logger.info("Archive    : %s", ARCHIVE_ROOT.resolve())
+    logger.info("Drive root : %s", RCLONE_REMOTE_ROOT)
     logger.info("Max retry  : %s", MAX_RETRIES)
     logger.info("Only match : %s", ONLY_MATCHED_FILES)
     logger.info("Subjects   : %d", len(SUBJECT_MAP))
     logger.info("Drive check: DISABLED")
-    logger.info("Google Drive upload is handled separately by rclone.")
+    logger.info("Upload mode: IMMEDIATE - each file uploads after download")
 
     ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
     manifest = load_manifest()
@@ -426,12 +510,13 @@ async def main():
 
         counters = {
             "scanned": 0,
-            "downloaded": 0,
+            "downloaded_uploaded": 0,
             "skipped_subject": 0,
             "skipped_manifest": 0,
             "skipped_local": 0,
             "skipped_other": 0,
             "failed": 0,
+            "failed_upload": 0,
         }
 
         processed = 0
@@ -445,8 +530,8 @@ async def main():
 
             result = await process_message(client, message, manifest)
 
-            if result == "DOWNLOADED":
-                counters["downloaded"] += 1
+            if result == "DOWNLOADED_UPLOADED":
+                counters["downloaded_uploaded"] += 1
                 processed += 1
             elif result == "SKIP_SUBJECT":
                 counters["skipped_subject"] += 1
@@ -456,19 +541,23 @@ async def main():
                 counters["skipped_local"] += 1
             elif result == "SKIP_OTHER":
                 counters["skipped_other"] += 1
+            elif result == "FAILED_UPLOAD":
+                counters["failed_upload"] += 1
+                counters["failed"] += 1
             elif result == "FAILED":
                 counters["failed"] += 1
 
         logger.info("=" * 70)
         logger.info("SCAN COMPLETE")
         logger.info("Messages scanned : %d", counters["scanned"])
-        logger.info("Downloaded       : %d", counters["downloaded"])
+        logger.info("Downloaded+Drive : %d", counters["downloaded_uploaded"])
         logger.info("No subject       : %d", counters["skipped_subject"])
         logger.info("Manifest skipped : %d", counters["skipped_manifest"])
         logger.info("Local skipped    : %d", counters["skipped_local"])
         logger.info("Other skipped    : %d", counters["skipped_other"])
         logger.info("Failed           : %d", counters["failed"])
-        logger.info("Google Drive     : NOT CHECKED")
+        logger.info("Upload failures  : %d", counters["failed_upload"])
+        logger.info("Google Drive     : uploaded per file immediately")
         logger.info("=" * 70)
 
     finally:
