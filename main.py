@@ -12,56 +12,70 @@ session_string = os.environ['TELEGRAM_SESSION']
 # Target channel ID
 channel_id = -1003708183148
 
-# Folder inside the runner to hold files temporarily before Rclone pushes them
+# Local staging directory on the GitHub Action VM runner
 save_path = './downloads/Telegram_Archive/GK-GS/parmar_ssc/'
 os.makedirs(save_path, exist_ok=True)
 
-# Google Drive path checked via Rclone (Must match your .yml path)
-# Format: "remote_name:folder/path"
-remote_drive_path = "gdrive1:Telegram_Archive/GK-GS/parmar_ssc/"
+# ⚠️ CORRECTION: Ensure 'gdrive1' matches the exact name inside your secret!
+# If your local rclone config was named 'gdrive', change this prefix to 'gdrive:'
+remote_drive_name = "gdrive1" 
+remote_drive_path = f"{remote_drive_name}:Telegram_Archive/GK-GS/parmar_ssc/"
 
 def get_already_downloaded_files():
-    """Queries Google Drive using Rclone to get a list of all existing files."""
-    print("Checking Google Drive for existing files...")
+    """Queries Google Drive via Rclone safely without throwing exit status crashes."""
+    print(f"Scanning Google Drive remote ({remote_drive_name}) for existing files...")
     existing_files = set()
+    
+    # First, let's verify if the remote actually exists in the configuration
     try:
-        # Runs 'rclone lsf' to cleanly list only the file names in that folder
+        remotes = subprocess.run(['rclone', 'listremotes'], stdout=subprocess.PIPE, text=True)
+        print(f"Available Rclone remotes discovered: {remotes.stdout.strip().splitlines()}")
+    except Exception:
+        pass
+
+    try:
         result = subprocess.run(
             ['rclone', 'lsf', remote_drive_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            check=True
+            text=True
         )
-        # Parse output into a set for O(1) ultra-fast lookup times
+        
+        # If exit code is not 0, it means the remote name is wrong or the folder doesn't exist yet
+        if result.returncode != 0:
+            print(f"⚠️ Rclone Notice: Remote folder unreadable or empty. Technical reason: {result.stderr.strip()}")
+            return existing_files
+
         for line in result.stdout.splitlines():
             if line.strip():
                 existing_files.add(line.strip())
-        print(f"Found {len(existing_files)} files already archived on Google Drive.")
+        print(f"Index created: {len(existing_files)} files found on Google Drive.")
     except Exception as e:
-        print(f"⚠️ Could not read remote Google Drive directory (it may be empty or new): {e}")
+        print(f"⚠️ Unexpected Rclone parsing error: {e}")
+        
     return existing_files
 
 async def main():
-    # 1. Fetch the list of files already stored safely on your Drive
+    # Phase 1: Pull live remote folder contents safely
     drive_files = get_already_downloaded_files()
 
-    print("Starting connection to Telegram...")
-    client = TelegramClient(StringSession(session_string), api_id, api_hash)
+    print("Initializing Telethon connection link...")
+    # Explicitly setting a longer connection timeout threshold on the client initialization
+    client = TelegramClient(StringSession(session_string), api_id, api_hash, timeout=120)
     await client.connect()
     
     if not await client.is_user_authorized():
-        print("CRITICAL ERROR: Session string is invalid or expired.")
+        print("CRITICAL ERROR: Telegram String Session key is invalid or expired.")
         return
 
-    print(f"Connected! Scraping videos and PDFs from ID: {channel_id}...")
+    print(f"Authorized! Parsing target feed ID: {channel_id}...")
     file_count = 0
 
     def progress_callback(received_bytes, total_bytes):
         if total_bytes:
             percentage = (received_bytes / total_bytes) * 100
             if int(percentage) % 25 == 0:
-                print(f" -> Progress: {percentage:.1f}%")
+                print(f" -> Download Progress: {percentage:.1f}%")
 
     async for message in client.iter_messages(channel_id):
         is_video = message.video is not None
@@ -69,28 +83,26 @@ async def main():
 
         if is_video or is_pdf:
             file_count += 1
+            extension = message.file.ext if message.file.ext else ('.mp4' if is_video else '.pdf')
 
             if message.file and message.file.name:
-                file_name = message.file.name
+                base_name, _ = os.path.splitext(message.file.name)
             else:
-                extension = message.file.ext if message.file.ext else ('.mp4' if is_video else '.pdf')
-                file_name = f"file_{message.id}{extension}"
+                base_name = "file"
 
-            # Sanitize filename string to match saved formats
-            file_name = "".join([c for c in file_name if c.isalpha() or c.isdigit() or c in ' ._-']).strip()
+            base_name = "".join([c for c in base_name if c.isalpha() or c.isdigit() or c in ' _-']).strip()
+            file_name = f"{base_name}_msg_{message.id}{extension}"
             full_path = os.path.join(save_path, file_name)
 
-            # --- DOUBLE DUPLICATION CHECK ---
-            # Check 1: Does it exist locally on the runner?
-            # Check 2: Does it already exist in your live Google Drive folder?
+            # --- DUPLICATION CHECK ---
             if os.path.exists(full_path) or file_name in drive_files:
-                print(f"[{file_count}] {file_name} already exists on Google Drive. Skipping download.")
+                print(f"[{file_count}] Skipping: {file_name} already exists on Google Drive.")
                 continue
 
             file_type = "Video" if is_video else "PDF"
-            print(f"[{file_count}] Downloading {file_type}: {file_name}...")
+            print(f"[{file_count}] Initiating Download [{file_type}]: {file_name}...")
 
-            # --- ROBUST RETRY SYSTEM TO FIX DISCONNECTIONS ---
+            # --- TIMEOUT RESISTANT BACKOFF RETRY SYSTEM ---
             max_retries = 5
             attempt = 0
             download_success = False
@@ -98,28 +110,37 @@ async def main():
             while attempt < max_retries and not download_success:
                 try:
                     if not client.is_connected():
-                        print("Reconnecting to Telegram servers...")
+                        print("Restoring dropped connection link...")
                         await client.connect()
 
-                    await client.download_media(message, file=full_path, progress_callback=progress_callback)
-                    print(f"Successfully saved {file_name}")
+                    # FIX: Force download using an explicit request timeout and custom small chunk sizing
+                    # request_size blocks ensure massive videos are handled incrementally without choking
+                    await client.download_media(
+                        message, 
+                        file=full_path, 
+                        progress_callback=progress_callback,
+                        request_size=1024 * 1024  # Forces 1MB chunk processing blocks
+                    )
+                    
+                    print(f"Successfully written: {file_name}")
                     download_success = True
-                    await asyncio.sleep(3) 
+                    await asyncio.sleep(2)
 
-                except (ConnectionError, asyncio.TimeoutError) as ce:
+                except (ConnectionError, asyncio.TimeoutError, Exception) as ce:
                     attempt += 1
-                    wait_time = attempt * 15
-                    print(f"⚠️ Telegram disconnected ({ce}). Retrying attempt {attempt}/{max_retries} in {wait_time}s...")
+                    wait_time = attempt * 20
+                    print(f"⚠️ Telegram pipeline error ({type(ce).__name__}: {ce}). Retrying attempt {attempt}/{max_retries} in {wait_time}s...")
+                    
+                    # If local file was partially written before crashing, delete it to prevent corrupted resume states
+                    if os.path.exists(full_path):
+                        os.remove(full_path)
+                        
                     await asyncio.sleep(wait_time)
 
-                except Exception as e:
-                    print(f"❌ Unrecoverable error with {file_name}: {e}")
-                    break
-
             if not download_success:
-                print(f"💥 Skipping {file_name} after {max_retries} failed connection attempts.")
+                print(f"💥 Permanent drop: Skipping {file_name} after {max_retries} failed connections.")
 
-    print(f"Finished! Processed {file_count} files.")
+    print(f"Job sequence completed. Total target elements parsed: {file_count}")
 
 if __name__ == "__main__":
     asyncio.run(main())
