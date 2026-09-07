@@ -13,6 +13,7 @@ jobs:
       API_HASH: ${{ secrets.API_HASH }}
       TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
       RCLONE_CONF_JSON: ${{ secrets.RCLONE_CONF }}
+      RCLONE_REMOTE_ROOT: gdrive1:Telegram_Archive/GK-GS
 
     steps:
       - name: Checkout Code
@@ -69,45 +70,19 @@ jobs:
           fi
 
           echo "Downloaded files:"
-          find "$ROOT" -type f -not -name '.DS_Store' -not -name '.download_manifest.json' -print
+          find "$ROOT" -type f -not -name '.DS_Store' -not -name '.download_manifest.json' -not -name '*.part' -print
 
           echo "File counts by type:"
           find "$ROOT" -type f \( -iname '*.mp4' -o -iname '*.mkv' -o -iname '*.avi' -o -iname '*.mov' -o -iname '*.webm' -o -iname '*.m4v' -o -iname '*.3gp' \) | wc -l | xargs echo "Videos:"
           find "$ROOT" -type f -iname '*.pdf' | wc -l | xargs echo "PDFs:"
 
-      - name: Upload Archive to Google Drive
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          LOCAL_ROOT="./downloads/Telegram_Archive/GK-GS"
-          REMOTE_ROOT="gdrive1:Telegram_Archive/GK-GS"
-
-          echo "=============================================="
-          echo "Uploading Telegram archive to Google Drive"
-          echo "Local : $LOCAL_ROOT"
-          echo "Remote: $REMOTE_ROOT"
-          echo "=============================================="
-
-          # Upload files only. No Google Drive existence check is performed by main.py.
-          # Rclone handles the actual transfer.
-          rclone copy "$LOCAL_ROOT" "$REMOTE_ROOT" \
-            --create-empty-src-dirs \
-            --progress \
-            --transfers 2 \
-            --checkers 4 \
-            --drive-chunk-size 64M \
-            --retries 5 \
-            --low-level-retries 10 \
-            --retries-sleep 10s
-
-      - name: Verify Google Drive Upload
+      - name: Verify Google Drive Uploads
         shell: bash
         run: |
           set -euo pipefail
           REMOTE_ROOT="gdrive1:Telegram_Archive/GK-GS"
 
-          echo "Google Drive archive listing:"
+          echo "Google Drive archive summary:"
           rclone size "$REMOTE_ROOT"
           rclone lsd "$REMOTE_ROOT" || true
-          echo "Upload completed successfully."
+          echo "Immediate per-file upload workflow completed."
