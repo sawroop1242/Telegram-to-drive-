@@ -13,25 +13,18 @@ session_string = os.environ['TELEGRAM_SESSION']
 channel_id = -1003708183148
 
 # Local staging directory on the GitHub Action VM runner
+# Updated to match the underscore configuration you verified working
 save_path = './downloads/Telegram_Archive/GK-GS/parmar_ssc/'
 os.makedirs(save_path, exist_ok=True)
 
-# ⚠️ CORRECTION: Ensure 'gdrive1' matches the exact name inside your secret!
-# If your local rclone config was named 'gdrive', change this prefix to 'gdrive:'
+# 🎯 MATCHED EXACTLY: Matches your successful 'rclone lsf' command path parameters
 remote_drive_name = "gdrive1" 
 remote_drive_path = f"{remote_drive_name}:Telegram_Archive/GK-GS/parmar_ssc/"
 
 def get_already_downloaded_files():
-    """Queries Google Drive via Rclone safely without throwing exit status crashes."""
-    print(f"Scanning Google Drive remote ({remote_drive_name}) for existing files...")
+    """Queries Google Drive via Rclone safely using your exact working remote path."""
+    print(f"Scanning Google Drive remote folder: [{remote_drive_path}]")
     existing_files = set()
-    
-    # First, let's verify if the remote actually exists in the configuration
-    try:
-        remotes = subprocess.run(['rclone', 'listremotes'], stdout=subprocess.PIPE, text=True)
-        print(f"Available Rclone remotes discovered: {remotes.stdout.strip().splitlines()}")
-    except Exception:
-        pass
 
     try:
         result = subprocess.run(
@@ -41,15 +34,16 @@ def get_already_downloaded_files():
             text=True
         )
         
-        # If exit code is not 0, it means the remote name is wrong or the folder doesn't exist yet
+        # If exit code is not 0, it means the folder is empty or new.
+        # We treat it as an empty set instead of throwing a fatal script crash.
         if result.returncode != 0:
-            print(f"⚠️ Rclone Notice: Remote folder unreadable or empty. Technical reason: {result.stderr.strip()}")
+            print(f"ℹ️ Rclone Info: Remote folder appears new or empty. (Logs: {result.stderr.strip()})")
             return existing_files
 
         for line in result.stdout.splitlines():
             if line.strip():
                 existing_files.add(line.strip())
-        print(f"Index created: {len(existing_files)} files found on Google Drive.")
+        print(f"Index successfully populated: {len(existing_files)} files tracked on Google Drive.")
     except Exception as e:
         print(f"⚠️ Unexpected Rclone parsing error: {e}")
         
@@ -60,7 +54,7 @@ async def main():
     drive_files = get_already_downloaded_files()
 
     print("Initializing Telethon connection link...")
-    # Explicitly setting a longer connection timeout threshold on the client initialization
+    # Setting an extended 120-second connection timeout threshold on the client initialization
     client = TelegramClient(StringSession(session_string), api_id, api_hash, timeout=120)
     await client.connect()
     
@@ -90,11 +84,14 @@ async def main():
             else:
                 base_name = "file"
 
+            # Clean and sanitize the string to remove illegal character blocks
             base_name = "".join([c for c in base_name if c.isalpha() or c.isdigit() or c in ' _-']).strip()
+            
+            # Unique message ID suffix ensures true 1:1 match across remote verification checks
             file_name = f"{base_name}_msg_{message.id}{extension}"
             full_path = os.path.join(save_path, file_name)
 
-            # --- DUPLICATION CHECK ---
+            # --- TRUE DUPLICATION CHECK ---
             if os.path.exists(full_path) or file_name in drive_files:
                 print(f"[{file_count}] Skipping: {file_name} already exists on Google Drive.")
                 continue
@@ -113,13 +110,12 @@ async def main():
                         print("Restoring dropped connection link...")
                         await client.connect()
 
-                    # FIX: Force download using an explicit request timeout and custom small chunk sizing
-                    # request_size blocks ensure massive videos are handled incrementally without choking
+                    # Force download using custom 1MB data chunks to prevent structural timeouts on large inputs
                     await client.download_media(
                         message, 
                         file=full_path, 
                         progress_callback=progress_callback,
-                        request_size=1024 * 1024  # Forces 1MB chunk processing blocks
+                        request_size=1024 * 1024  
                     )
                     
                     print(f"Successfully written: {file_name}")
@@ -131,7 +127,7 @@ async def main():
                     wait_time = attempt * 20
                     print(f"⚠️ Telegram pipeline error ({type(ce).__name__}: {ce}). Retrying attempt {attempt}/{max_retries} in {wait_time}s...")
                     
-                    # If local file was partially written before crashing, delete it to prevent corrupted resume states
+                    # Wipe partial corrupted file fragments immediately before trying again
                     if os.path.exists(full_path):
                         os.remove(full_path)
                         
