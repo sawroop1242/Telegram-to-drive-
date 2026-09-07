@@ -13,12 +13,12 @@ session_string = os.environ['TELEGRAM_SESSION']
 channel_id = -1003708183148
 
 # Folder inside the runner to hold files temporarily before Rclone pushes them
-save_path = './downloads/Telegram_Archive/GK-GS/parmar ssc/'
+save_path = './downloads/Telegram_Archive/GK-GS/parmar_ssc/'
 os.makedirs(save_path, exist_ok=True)
 
 # Google Drive path checked via Rclone (Must match your .yml path)
 # Format: "remote_name:folder/path"
-remote_drive_path = "gdrive1:Telegram_Archive/GK-GS/parmar ssc/"
+remote_drive_path = "gdrive1:Telegram_Archive/GK-GS/parmar_ssc/"
 
 def get_already_downloaded_files():
     """Queries Google Drive using Rclone to get a list of all existing files."""
