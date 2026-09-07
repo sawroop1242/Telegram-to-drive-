@@ -168,7 +168,7 @@ def get_already_downloaded_files():
 
 
 async def main():
-    drive_files = get_already_downloaded_files()
+    #drive_files = get_already_downloaded_files()
 
     print("Initializing Telethon connection...")
     client = TelegramClient(
@@ -239,7 +239,7 @@ async def main():
         file_name = f"{base_name}_msg_{message.id}{extension}"
         full_path = os.path.join(save_path, file_name)
 
-        if os.path.exists(full_path) or file_name in drive_files:
+        if os.path.exists(full_path) :
             print(f"[{selected}] Skipping [{subject}]: {file_name} already exists.")
             continue
 
