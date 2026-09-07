@@ -53,24 +53,14 @@ logger = logging.getLogger("telegram_archive")
 # ============================================================
 
 SUBJECT_MAP = {
-    "Ancient_History": [
-        "ancient history", "ancient_history", "ancienthistory", "प्राचीन इतिहास",
-    ],
+    
     "Medieval_History": [
         "medieval history", "medieval_history", "medievalhistory", "मध्यकालीन इतिहास",
     ],
     "Modern_History": [
         "modern history", "modern_history", "modernhistory", "आधुनिक इतिहास",
     ],
-    "Polity": [
-        "polity", "indian polity", "constitution", "constitutional", "राजव्यवस्था", "संविधान",
-    ],
-    "Geography": [
-        "geography", "geo", "भूगोल",
-    ],
-    "Economics": [
-        "economics", "economy", "indian economy", "अर्थशास्त्र", "अर्थव्यवस्था",
-    ],
+    
     "Physics": [
         "physics", "भौतिक विज्ञान",
     ],
