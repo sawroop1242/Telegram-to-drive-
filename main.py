@@ -360,8 +360,7 @@ async def download_file(
             downloaded_path = await client.download_media(
                 message,
                 file=str(destination),
-                progress_callback=progress,
-                request_size=REQUEST_SIZE,
+                progress_callback=progress
             )
 
             if downloaded_path and destination.exists():
