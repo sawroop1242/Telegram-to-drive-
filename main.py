@@ -13,7 +13,7 @@ session_string = os.environ['TELEGRAM_SESSION']
 channel_id = 'aditya_ranjan_maths_vidyagramm'
 
 # Folder inside the runner to hold files temporarily before Rclone pushes them
-save_path = './downloads/Telegram_Archive/maths/vidya gram/'
+save_path = './downloads/Telegram_Archive/Maths/vidya gram/'
 os.makedirs(save_path, exist_ok=True)
 
 # Google Drive path checked via Rclone (Must match your .yml path)
