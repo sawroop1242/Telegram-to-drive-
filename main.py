@@ -4,18 +4,17 @@ import logging
 import os
 import re
 import signal
-import time
 from pathlib import Path
 from typing import Optional
 
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.errors import (
     FloodWaitError,
     RPCError,
     ServerError,
     TimedOutError,
 )
-from telethon.sessions import StringSession
 
 
 # ============================================================
@@ -24,50 +23,74 @@ from telethon.sessions import StringSession
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
-SESSION_STRING = os.environ["TELEGRAM_SESSION"]
+TELEGRAM_SESSION = os.environ["TELEGRAM_SESSION"]
 
-# Telegram channel / group ID
-CHANNEL_ID = -1003708183148
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1003708183148"))
 
-# Local archive root
-BASE_PATH = Path("./downloads/Telegram_Archive/GK-GS")
+ARCHIVE_ROOT = Path(
+    os.getenv(
+        "ARCHIVE_ROOT",
+        "./downloads/Telegram_Archive/GK-GS",
+    )
+)
 
-# Maximum number of retry attempts per file
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
+DOWNLOAD_DELAY = float(os.getenv("DOWNLOAD_DELAY", "1"))
+RETRY_DELAY = float(os.getenv("RETRY_DELAY", "5"))
 
-# Delay between successful downloads
-DOWNLOAD_DELAY = float(os.getenv("DOWNLOAD_DELAY", "1.5"))
-
-# Telegram request timeout
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "120"))
-
-# Download chunk size
-REQUEST_SIZE = 1024 * 1024  # 1 MB
-
-# Set to true if files that don't match a subject should be skipped
-ONLY_MATCHED_FILES = os.getenv("ONLY_MATCHED_FILES", "false").lower() == "true"
-
-# Optional maximum number of files to process.
 # 0 = unlimited
 MAX_FILES = int(os.getenv("MAX_FILES", "0"))
 
-# Manifest used for resumability
-MANIFEST_FILE = BASE_PATH / ".download_manifest.json"
+# If true, only files matching the subject list are downloaded.
+ONLY_MATCHED_FILES = True
+
+# Manifest used to avoid downloading the same Telegram message again.
+MANIFEST_FILE = ARCHIVE_ROOT / ".download_manifest.json"
+
 
 # ============================================================
-# SUBJECT CLASSIFICATION
+# ALLOWED SUBJECTS
 # ============================================================
 
-SUBJECT_FILTERS = {
+SUBJECT_MAP = {
+    
+
     "MEDIEVAL HISTORY": "Medieval_History",
-    "MODERN HISTORY": "Modern_History",
-    "PHYSICS": "Physics",
-    "CHEMISTRY": "Chemistry",
-    "BIOLOGY": "Biology",
-    "STATIC GK": "Static_GK",
-}
+    "MEDIEVAL": "Medieval_History",
 
-DEFAULT_FOLDER = "Other_Stray_Files"
+    "MODERN HISTORY": "Modern_History",
+    "MODERN": "Modern_History",
+
+
+
+    
+    "PHYSICS": "Physics",
+
+    "CHEMISTRY": "Chemistry",
+
+    "BIOLOGY": "Biology",
+
+    "STATIC GK": "Static_GK",
+    "STATIC GENERAL KNOWLEDGE": "Static_GK",
+
+    "CURRENT AFFAIRS": "Current_Affairs",
+    "CURRENT AFFAIR": "Current_Affairs",
+
+    "GENERAL SCIENCE": "General_Science",
+    "GENERAL SCIENCE": "General_Science",
+
+    "ENVIRONMENT": "Environment",
+    "ENVIRONMENT & ECOLOGY": "Environment",
+    "ENVIRONMENT AND ECOLOGY": "Environment",
+
+    "ART AND CULTURE": "Art_and_Culture",
+    "ART & CULTURE": "Art_and_Culture",
+    "ART CULTURE": "Art_and_Culture",
+
+    "COMPUTER": "Computer",
+    "COMPUTER SCIENCE": "Computer",
+    "COMPUTER AWARENESS": "Computer",
+}
 
 
 # ============================================================
@@ -79,22 +102,32 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
-logger = logging.getLogger("telegram-downloader")
+logger = logging.getLogger("telegram_downloader")
 
 
 # ============================================================
-# GLOBAL SHUTDOWN FLAG
+# GLOBAL STATE
 # ============================================================
 
 shutdown_requested = False
 
 
-def request_shutdown(*_args):
+# ============================================================
+# SIGNAL HANDLING
+# ============================================================
+
+def handle_shutdown(signum, frame):
     global shutdown_requested
 
-    if not shutdown_requested:
-        shutdown_requested = True
-        logger.warning("Shutdown requested. Finishing current operation...")
+    shutdown_requested = True
+
+    logger.warning(
+        "Shutdown requested. Current operation will finish safely..."
+    )
+
+
+signal.signal(signal.SIGINT, handle_shutdown)
+signal.signal(signal.SIGTERM, handle_shutdown)
 
 
 # ============================================================
@@ -106,203 +139,397 @@ def load_manifest() -> dict:
         return {}
 
     try:
-        with MANIFEST_FILE.open("r", encoding="utf-8") as f:
+        with open(MANIFEST_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        if isinstance(data, dict):
-            return data
+        if not isinstance(data, dict):
+            return {}
+
+        return data
 
     except Exception as exc:
-        logger.warning("Could not read manifest: %s", exc)
+        logger.warning(
+            "Could not read manifest: %s",
+            exc,
+        )
 
-    return {}
+        return {}
 
 
 def save_manifest(manifest: dict):
-    BASE_PATH.mkdir(parents=True, exist_ok=True)
-
-    temporary_file = MANIFEST_FILE.with_suffix(".tmp")
-
-    try:
-        with temporary_file.open("w", encoding="utf-8") as f:
-            json.dump(
-                manifest,
-                f,
-                indent=2,
-                ensure_ascii=False,
-            )
-
-        temporary_file.replace(MANIFEST_FILE)
-
-    except Exception as exc:
-        logger.warning("Could not save manifest: %s", exc)
-
-
-# ============================================================
-# FILENAME UTILITIES
-# ============================================================
-
-def sanitize_filename(name: str) -> str:
-    """
-    Remove characters that are unsafe for filenames while
-    preserving spaces, dots, underscores and hyphens.
-    """
-
-    name = name.strip()
-
-    # Remove control characters
-    name = re.sub(r"[\x00-\x1f\x7f]", "", name)
-
-    # Replace filesystem-dangerous characters
-    name = re.sub(r'[<>:"/\\|?*]', "_", name)
-
-    # Collapse repeated spaces
-    name = re.sub(r"\s+", " ", name)
-
-    # Avoid filenames ending in dots/spaces
-    name = name.rstrip(". ")
-
-    if not name:
-        name = "file"
-
-    return name[:180]
-
-
-def get_extension(message, is_video: bool, is_pdf: bool) -> str:
-    """
-    Determine the most reliable file extension.
-    """
-
-    if message.file:
-        ext = message.file.ext
-
-        if ext:
-            return ext.lower()
-
-    if is_video:
-        return ".mp4"
-
-    if is_pdf:
-        return ".pdf"
-
-    return ".bin"
-
-
-def build_filename(message, is_video: bool, is_pdf: bool) -> str:
-    extension = get_extension(
-        message,
-        is_video,
-        is_pdf,
+    ARCHIVE_ROOT.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
-    original_name = None
+    temp_file = MANIFEST_FILE.with_suffix(".tmp")
 
-    if message.file and message.file.name:
-        original_name = message.file.name
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(
+            manifest,
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
 
-    if original_name:
-        base_name = Path(original_name).stem
-    else:
-        base_name = "file"
-
-    base_name = sanitize_filename(base_name)
-
-    # Message ID guarantees deterministic uniqueness.
-    return f"{base_name}_msg_{message.id}{extension}"
+    temp_file.replace(MANIFEST_FILE)
 
 
 # ============================================================
-# SUBJECT DETECTION
+# TEXT / FILENAME HELPERS
 # ============================================================
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Make Telegram filenames safe for Linux/Windows/Drive.
+    """
+
+    filename = filename.strip()
+
+    filename = re.sub(
+        r'[<>:"/\\|?*\x00-\x1F]',
+        "_",
+        filename,
+    )
+
+    filename = re.sub(
+        r"\s+",
+        " ",
+        filename,
+    )
+
+    filename = filename.strip(" .")
+
+    if not filename:
+        filename = "telegram_file"
+
+    # Avoid extremely long filesystem names.
+    if len(filename) > 180:
+        suffix = Path(filename).suffix
+
+        filename = (
+            filename[:180 - len(suffix)]
+            + suffix
+        )
+
+    return filename
+
+
+def normalize_text(text: str) -> str:
+    """
+    Normalize separators so that:
+
+    COMPUTER
+    COMPUTER_
+    COMPUTER-
+    COMPUTER / SCIENCE
+
+    can be classified more reliably.
+    """
+
+    text = text.upper()
+
+    text = text.replace("_", " ")
+    text = text.replace("-", " ")
+    text = text.replace("/", " ")
+    text = text.replace("\\", " ")
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
+
+    return text.strip()
+
 
 def get_message_text(message) -> str:
     parts = []
 
-    if message.text:
-        parts.append(message.text)
+    if getattr(message, "message", None):
+        parts.append(message.message)
 
-    if message.file and message.file.name:
-        parts.append(message.file.name)
+    if getattr(message, "raw_text", None):
+        parts.append(message.raw_text)
 
-    return " ".join(parts).upper()
+    if getattr(message, "file", None):
+        if getattr(message.file, "name", None):
+            parts.append(message.file.name)
+
+    return " ".join(parts)
 
 
-def classify_subject(message) -> tuple[str, Optional[str]]:
+# ============================================================
+# SUBJECT CLASSIFICATION
+# ============================================================
+
+def classify_subject(message) -> Optional[str]:
     """
-    Return:
-        (folder_name, matched_keyword)
+    Return the allowed subject folder.
+
+    Return None when no allowed subject is detected.
+
+    IMPORTANT:
+    None means the file must NOT be downloaded.
     """
 
-    text = get_message_text(message)
+    text = normalize_text(
+        get_message_text(message)
+    )
 
-    for keyword, folder_name in SUBJECT_FILTERS.items():
+    if not text:
+        return None
 
-        # Match the complete phrase instead of accidental
-        # partial matches.
-        pattern = rf"\b{re.escape(keyword)}\b"
+    # Longer / more specific phrases first.
+    subjects = sorted(
+        SUBJECT_MAP.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
 
-        if re.search(pattern, text):
-            return folder_name, keyword
+    for keyword, folder in subjects:
 
-    return DEFAULT_FOLDER, None
+        keyword_normalized = normalize_text(
+            keyword
+        )
+
+        if keyword_normalized in text:
+            return folder
+
+    return None
 
 
 # ============================================================
 # FILE TYPE DETECTION
 # ============================================================
 
-def detect_file_type(message) -> tuple[bool, bool]:
-    is_video = bool(message.video)
+def detect_file_type(message) -> Optional[str]:
+    """
+    Returns:
 
-    is_pdf = bool(
-        message.document
-        and message.document.mime_type
-        and message.document.mime_type.lower() == "application/pdf"
-    )
+    PDF
+    VIDEO
+    None
+    """
 
-    return is_video, is_pdf
+    if getattr(message, "video", None):
+        return "VIDEO"
+
+    document = getattr(message, "document", None)
+
+    if document:
+        mime_type = (
+            getattr(
+                document,
+                "mime_type",
+                "",
+            )
+            or ""
+        ).lower()
+
+        if mime_type == "application/pdf":
+            return "PDF"
+
+        # Some Telegram files may have an incorrect MIME type.
+        filename = ""
+
+        if getattr(message, "file", None):
+            filename = (
+                getattr(
+                    message.file,
+                    "name",
+                    "",
+                )
+                or ""
+            )
+
+        if filename.lower().endswith(".pdf"):
+            return "PDF"
+
+        if mime_type.startswith("video/"):
+            return "VIDEO"
+
+        extension = Path(filename).suffix.lower()
+
+        if extension in {
+            ".mp4",
+            ".mkv",
+            ".avi",
+            ".mov",
+            ".webm",
+            ".m4v",
+        }:
+            return "VIDEO"
+
+    return None
 
 
 # ============================================================
-# DOWNLOAD PROGRESS
+# FILE EXTENSION
+# ============================================================
+
+def get_extension(message, file_type: str) -> str:
+
+    if getattr(message, "file", None):
+        filename = (
+            getattr(
+                message.file,
+                "name",
+                "",
+            )
+            or ""
+        )
+
+        extension = Path(filename).suffix
+
+        if extension:
+            return extension.lower()
+
+    if file_type == "PDF":
+        return ".pdf"
+
+    if file_type == "VIDEO":
+        return ".mp4"
+
+    return ""
+
+
+# ============================================================
+# FILENAME
+# ============================================================
+
+def build_filename(
+    message,
+    file_type: str,
+) -> str:
+
+    original_name = ""
+
+    if getattr(message, "file", None):
+        original_name = (
+            getattr(
+                message.file,
+                "name",
+                "",
+            )
+            or ""
+        )
+
+    if not original_name:
+
+        if file_type == "PDF":
+            original_name = "document.pdf"
+
+        elif file_type == "VIDEO":
+            original_name = "video.mp4"
+
+        else:
+            original_name = "telegram_file"
+
+    original_name = sanitize_filename(
+        original_name
+    )
+
+    extension = get_extension(
+        message,
+        file_type,
+    )
+
+    # Make sure extension exists.
+    if not Path(original_name).suffix:
+        original_name += extension
+
+    message_id = getattr(
+        message,
+        "id",
+        "unknown",
+    )
+
+    stem = Path(original_name).stem
+    suffix = Path(original_name).suffix
+
+    filename = (
+        f"{stem}_msg_{message_id}{suffix}"
+    )
+
+    return sanitize_filename(filename)
+
+
+# ============================================================
+# DESTINATION
+# ============================================================
+
+def get_destination(
+    subject: str,
+    file_type: str,
+) -> Path:
+
+    if file_type == "VIDEO":
+        type_folder = "Videos"
+
+    else:
+        type_folder = "PDFs"
+
+    destination = (
+        ARCHIVE_ROOT
+        / subject
+        / type_folder
+    )
+
+    destination.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    return destination
+
+
+# ============================================================
+# PROGRESS CALLBACK
 # ============================================================
 
 class DownloadProgress:
-    """
-    Prevent GitHub Actions logs from being flooded with
-    thousands of progress messages.
-    """
 
     def __init__(self, filename: str):
         self.filename = filename
-        self.last_percentage = -1
-        self.last_time = 0.0
+        self.last_percent = -1
 
-    def __call__(self, received: int, total: int):
+    def __call__(
+        self,
+        current: int,
+        total: int,
+    ):
 
-        if not total:
+        if total <= 0:
             return
 
-        percentage = int((received / total) * 100)
-        now = time.monotonic()
+        percent = int(
+            current * 100 / total
+        )
 
-        # Print every 10% or at least every 5 seconds
-        if (
-            percentage >= self.last_percentage + 10
-            or now - self.last_time >= 5
-            or percentage == 100
-        ):
-            self.last_percentage = percentage
-            self.last_time = now
+        # Log every 10%.
+        bucket = (
+            percent // 10
+        ) * 10
 
-            received_mb = received / (1024 * 1024)
-            total_mb = total / (1024 * 1024)
+        if bucket > self.last_percent:
+
+            self.last_percent = bucket
+
+            current_mb = current / (
+                1024 * 1024
+            )
+
+            total_mb = total / (
+                1024 * 1024
+            )
 
             logger.info(
-                "Downloading %-45s %3d%% (%0.1f/%0.1f MB)",
-                self.filename[:45],
-                percentage,
-                received_mb,
+                "Downloading %-55s %3d%% "
+                "(%.1f/%.1f MB)",
+                self.filename[:55],
+                percent,
+                current_mb,
                 total_mb,
             )
 
@@ -312,10 +539,18 @@ class DownloadProgress:
 # ============================================================
 
 def remove_partial_file(path: Path):
+
     try:
         if path.exists():
             path.unlink()
-    except OSError as exc:
+
+            logger.warning(
+                "Removed partial file: %s",
+                path.name,
+            )
+
+    except Exception as exc:
+
         logger.warning(
             "Could not remove partial file %s: %s",
             path,
@@ -324,431 +559,354 @@ def remove_partial_file(path: Path):
 
 
 # ============================================================
-# DOWNLOAD ONE FILE
+# DOWNLOAD
 # ============================================================
 
 async def download_file(
     client: TelegramClient,
     message,
     destination: Path,
+    filename: str,
 ) -> bool:
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    output_path = destination / filename
+
+    # Already downloaded.
+    if output_path.exists():
+
+        logger.info(
+            "ALREADY EXISTS: %s",
+            filename,
+        )
+
+        return True
+
+    progress = DownloadProgress(
+        filename
+    )
+
+    for attempt in range(
+        1,
+        MAX_RETRIES + 1,
+    ):
 
         if shutdown_requested:
             return False
 
+        logger.info(
+            "Download attempt %d/%d: %s",
+            attempt,
+            MAX_RETRIES,
+            filename,
+        )
+
         try:
 
-            if not client.is_connected():
-                logger.warning("Telegram connection lost. Reconnecting...")
-                await client.connect()
+            # IMPORTANT:
+            # Do NOT use request_size here.
+            #
+            # Telethon's high-level download_media()
+            # does not accept request_size in the installed
+            # version.
 
-            if not await client.is_user_authorized():
-                logger.error("Telegram session is no longer authorized.")
-                return False
-
-            logger.info(
-                "Download attempt %d/%d: %s",
-                attempt,
-                MAX_RETRIES,
-                destination.name,
+            downloaded_path = (
+                await client.download_media(
+                    message,
+                    file=str(output_path),
+                    progress_callback=progress,
+                )
             )
 
-            progress = DownloadProgress(destination.name)
+            if downloaded_path:
 
-            downloaded_path = await client.download_media(
-                message,
-                file=str(destination),
-                progress_callback=progress
-            )
-
-            if downloaded_path and destination.exists():
-
-                # Basic integrity check
-                file_size = destination.stat().st_size
-
-                if file_size == 0:
-                    raise IOError("Downloaded file is empty.")
-
-                logger.info(
-                    "SUCCESS: %s (%0.2f MB)",
-                    destination.name,
-                    file_size / (1024 * 1024),
+                actual_path = Path(
+                    downloaded_path
                 )
 
-                return True
+                if actual_path.exists():
 
-            raise IOError("Telegram returned no valid downloaded file.")
+                    size_mb = (
+                        actual_path.stat().st_size
+                        / (1024 * 1024)
+                    )
+
+                    logger.info(
+                        "SUCCESS: %s (%.2f MB)",
+                        filename,
+                        size_mb,
+                    )
+
+                    return True
+
+            logger.warning(
+                "Download returned no file: %s",
+                filename,
+            )
+
+        # ----------------------------------------------------
+        # FLOOD WAIT
+        # ----------------------------------------------------
 
         except FloodWaitError as exc:
 
-            # Telegram explicitly tells us how long to wait.
-            wait_seconds = exc.seconds + 5
+            wait_seconds = (
+                int(exc.seconds) + 2
+            )
 
             logger.warning(
-                "Telegram FloodWait: waiting %d seconds.",
+                "Telegram FloodWait: "
+                "waiting %d seconds",
                 wait_seconds,
             )
 
-            await asyncio.sleep(wait_seconds)
+            await asyncio.sleep(
+                wait_seconds
+            )
 
-        except (TimedOutError, asyncio.TimeoutError, ServerError) as exc:
+            continue
 
-            wait_seconds = min(60, attempt * 10)
+        # ----------------------------------------------------
+        # TELETHON TIMEOUT
+        # ----------------------------------------------------
+
+        except (
+            TimedOutError,
+            asyncio.TimeoutError,
+        ) as exc:
 
             logger.warning(
-                "Temporary Telegram error: %s | retrying in %ds",
+                "Timeout downloading %s: %s",
+                filename,
                 exc,
-                wait_seconds,
             )
 
-            remove_partial_file(destination)
-            await asyncio.sleep(wait_seconds)
+        # ----------------------------------------------------
+        # CONNECTION / SERVER ERRORS
+        # ----------------------------------------------------
 
-        except (ConnectionError, OSError) as exc:
-
-            wait_seconds = min(60, attempt * 10)
+        except (
+            ServerError,
+            ConnectionError,
+            OSError,
+        ) as exc:
 
             logger.warning(
-                "Connection/file error: %s | retrying in %ds",
+                "Temporary connection error "
+                "downloading %s: %s",
+                filename,
                 exc,
-                wait_seconds,
             )
 
-            remove_partial_file(destination)
-            await asyncio.sleep(wait_seconds)
+        # ----------------------------------------------------
+        # RPC ERRORS
+        # ----------------------------------------------------
 
         except RPCError as exc:
 
-            # RPC errors aren't always retryable, but transient
-            # server errors may recover.
-            if attempt < MAX_RETRIES:
-
-                wait_seconds = min(60, attempt * 10)
-
-                logger.warning(
-                    "Telegram RPC error: %s | retrying in %ds",
-                    exc,
-                    wait_seconds,
-                )
-
-                remove_partial_file(destination)
-                await asyncio.sleep(wait_seconds)
-
-            else:
-                logger.error(
-                    "Permanent/unknown Telegram RPC failure: %s",
-                    exc,
-                )
-
-        except Exception as exc:
-
-            # Unexpected errors are logged and retried a limited
-            # number of times instead of being silently swallowed.
-            logger.exception(
-                "Unexpected error downloading %s: %s",
-                destination.name,
+            logger.warning(
+                "Telegram RPC error "
+                "downloading %s: %s",
+                filename,
                 exc,
             )
 
-            remove_partial_file(destination)
+        # ----------------------------------------------------
+        # API / PROGRAMMING ERROR
+        # ----------------------------------------------------
 
-            if attempt < MAX_RETRIES:
-                wait_seconds = min(60, attempt * 10)
-                await asyncio.sleep(wait_seconds)
+        except TypeError as exc:
+
+            logger.error(
+                "Non-retryable API error "
+                "downloading %s: %s",
+                filename,
+                exc,
+            )
+
+            return False
+
+        # ----------------------------------------------------
+        # UNEXPECTED ERROR
+        # ----------------------------------------------------
+
+        except Exception as exc:
+
+            logger.exception(
+                "Unexpected error downloading %s: %s",
+                filename,
+                exc,
+            )
+
+            # Do not endlessly retry programming errors.
+            return False
+
+        # ----------------------------------------------------
+        # CLEAN PARTIAL DOWNLOAD
+        # ----------------------------------------------------
+
+        if attempt < MAX_RETRIES:
+
+            remove_partial_file(
+                output_path
+            )
+
+            wait = (
+                RETRY_DELAY * attempt
+            )
+
+            logger.info(
+                "Retrying in %.1f seconds...",
+                wait,
+            )
+
+            await asyncio.sleep(
+                wait,
+            )
 
     logger.error(
         "FAILED after %d attempts: %s",
         MAX_RETRIES,
-        destination.name,
+        filename,
+    )
+
+    remove_partial_file(
+        output_path
     )
 
     return False
 
 
 # ============================================================
-# MAIN
+# PROCESS MESSAGE
 # ============================================================
 
-async def main():
+async def process_message(
+    client: TelegramClient,
+    message,
+    manifest: dict,
+) -> str:
 
-    global shutdown_requested
-
-    # Create archive root
-    BASE_PATH.mkdir(
-        parents=True,
-        exist_ok=True,
+    message_id = str(
+        getattr(message, "id", "")
     )
 
-    manifest = load_manifest()
+    # --------------------------------------------------------
+    # Detect file type
+    # --------------------------------------------------------
 
-    logger.info("=" * 70)
-    logger.info("Telegram Archive Downloader")
-    logger.info("=" * 70)
-
-    logger.info("Channel ID : %s", CHANNEL_ID)
-    logger.info("Archive    : %s", BASE_PATH.resolve())
-    logger.info("Max retry  : %d", MAX_RETRIES)
-    logger.info("Only match : %s", ONLY_MATCHED_FILES)
-
-    client = TelegramClient(
-        StringSession(SESSION_STRING),
-        API_ID,
-        API_HASH,
-        timeout=REQUEST_TIMEOUT,
-        connection_retries=5,
-        retry_delay=5,
-        auto_reconnect=True,
+    file_type = detect_file_type(
+        message
     )
 
-    try:
+    if file_type is None:
 
-        logger.info("Connecting to Telegram...")
+        logger.info(
+            "SKIP [message %s]: "
+            "Not a PDF or video",
+            message_id,
+        )
 
-        await client.connect()
+        return "skipped"
 
-        if not await client.is_user_authorized():
-            logger.error(
-                "CRITICAL: Telegram StringSession is invalid or expired."
+    # --------------------------------------------------------
+    # Classify SUBJECT BEFORE DOWNLOAD
+    # --------------------------------------------------------
+
+    subject = classify_subject(
+        message
+    )
+
+    # This is the critical rule.
+    # No matching subject = NEVER DOWNLOAD.
+    if subject is None:
+
+        filename = ""
+
+        if getattr(message, "file", None):
+            filename = (
+                getattr(
+                    message.file,
+                    "name",
+                    "",
+                )
+                or ""
             )
-            return
 
-        logger.info("Telegram authorization successful.")
+        if not filename:
+            filename = (
+                f"message_{message_id}"
+            )
 
-        # Verify target entity before processing the entire channel.
-        try:
-            entity = await client.get_entity(CHANNEL_ID)
+        logger.info(
+            "SKIP [NO ALLOWED SUBJECT] "
+            "[%s] %s",
+            file_type,
+            filename,
+        )
+
+        return "skipped"
+
+    # --------------------------------------------------------
+    # Build destination
+    # --------------------------------------------------------
+
+    destination = get_destination(
+        subject,
+        file_type,
+    )
+
+    filename = build_filename(
+        message,
+        file_type,
+    )
+
+    output_path = (
+        destination / filename
+    )
+
+    # --------------------------------------------------------
+    # Manifest check
+    # --------------------------------------------------------
+
+    manifest_key = (
+        f"{CHANNEL_ID}:{message_id}"
+    )
+
+    existing_record = manifest.get(
+        manifest_key
+    )
+
+    if existing_record:
+
+        recorded_path = Path(
+            existing_record.get(
+                "path",
+                "",
+            )
+        )
+
+        if recorded_path.exists():
 
             logger.info(
-                "Target resolved: %s",
-                getattr(entity, "title", CHANNEL_ID),
-            )
-
-        except Exception as exc:
-            logger.error(
-                "Could not resolve Telegram channel %s: %s",
-                CHANNEL_ID,
-                exc,
-            )
-            return
-
-        processed = 0
-        downloaded = 0
-        skipped = 0
-        failed = 0
-        unmatched = 0
-
-        logger.info("Scanning messages...")
-
-        async for message in client.iter_messages(entity):
-
-            if shutdown_requested:
-                logger.warning("Stopping message scan.")
-                break
-
-            if MAX_FILES > 0 and processed >= MAX_FILES:
-                logger.info(
-                    "MAX_FILES=%d reached.",
-                    MAX_FILES,
-                )
-                break
-
-            is_video, is_pdf = detect_file_type(message)
-
-            # Only process videos and PDFs.
-            if not (is_video or is_pdf):
-                continue
-
-            processed += 1
-
-            folder_name, matched_keyword = classify_subject(message)
-
-            if matched_keyword is None:
-                unmatched += 1
-
-                if ONLY_MATCHED_FILES:
-                    logger.info(
-                        "[%d] Skipping unmatched file: message %s",
-                        processed,
-                        message.id,
-                    )
-                    skipped += 1
-                    continue
-
-            target_directory = BASE_PATH / folder_name
-            target_directory.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-
-            filename = build_filename(
-                message,
-                is_video,
-                is_pdf,
-            )
-
-            destination = target_directory / filename
-
-            # ----------------------------------------------------
-            # Fast local existence check
-            # ----------------------------------------------------
-
-            if destination.exists():
-
-                logger.info(
-                    "[%d] SKIP existing: %s/%s",
-                    processed,
-                    folder_name,
-                    filename,
-                )
-
-                skipped += 1
-
-                manifest[str(message.id)] = {
-                    "status": "downloaded",
-                    "path": str(destination),
-                    "folder": folder_name,
-                    "filename": filename,
-                    "type": "video" if is_video else "pdf",
-                    "updated_at": int(time.time()),
-                }
-
-                save_manifest(manifest)
-
-                continue
-
-            # ----------------------------------------------------
-            # Manifest check
-            # ----------------------------------------------------
-
-            record = manifest.get(str(message.id))
-
-            if record and record.get("status") == "downloaded":
-
-                recorded_path = Path(
-                    record.get("path", "")
-                )
-
-                if recorded_path.exists():
-
-                    logger.info(
-                        "[%d] SKIP manifest: message %s",
-                        processed,
-                        message.id,
-                    )
-
-                    skipped += 1
-                    continue
-
-            file_type = "Video" if is_video else "PDF"
-
-            logger.info(
-                "[%d] [%s] [%s] %s",
-                processed,
-                folder_name,
-                file_type,
+                "MANIFEST SKIP: %s",
                 filename,
             )
 
-            if matched_keyword:
-                logger.info(
-                    "Matched subject: %s",
-                    matched_keyword,
-                )
+            return "already_done"
 
-            success = await download_file(
-                client,
-                message,
-                destination,
-            )
+    # --------------------------------------------------------
+    # Existing physical file
+    # --------------------------------------------------------
 
-            if success:
+    if output_path.exists():
 
-                downloaded += 1
-
-                manifest[str(message.id)] = {
-                    "status": "downloaded",
-                    "path": str(destination),
-                    "folder": folder_name,
-                    "filename": filename,
-                    "type": "video" if is_video else "pdf",
-                    "message_id": message.id,
-                    "updated_at": int(time.time()),
-                }
-
-                save_manifest(manifest)
-
-                await asyncio.sleep(DOWNLOAD_DELAY)
-
-            else:
-
-                failed += 1
-
-                manifest[str(message.id)] = {
-                    "status": "failed",
-                    "path": str(destination),
-                    "folder": folder_name,
-                    "filename": filename,
-                    "type": "video" if is_video else "pdf",
-                    "message_id": message.id,
-                    "updated_at": int(time.time()),
-                }
-
-                save_manifest(manifest)
-
-        # ========================================================
-        # FINAL REPORT
-        # ========================================================
-
-        logger.info("")
-        logger.info("=" * 70)
-        logger.info("DOWNLOAD JOB COMPLETED")
-        logger.info("=" * 70)
-
-        logger.info("Files processed : %d", processed)
-        logger.info("Downloaded      : %d", downloaded)
-        logger.info("Skipped         : %d", skipped)
-        logger.info("Failed          : %d", failed)
-        logger.info("Unmatched       : %d", unmatched)
-
-        logger.info("Archive path    : %s", BASE_PATH.resolve())
-
-        logger.info("=" * 70)
-
-    finally:
-
-        if client.is_connected():
-            logger.info("Disconnecting from Telegram...")
-            await client.disconnect()
-
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
-
-if __name__ == "__main__":
-
-    # Graceful shutdown for GitHub Actions / Ctrl+C
-    signal.signal(
-        signal.SIGINT,
-        request_shutdown,
-    )
-
-    signal.signal(
-        signal.SIGTERM,
-        request_shutdown,
-    )
-
-    try:
-        asyncio.run(main())
-
-    except KeyboardInterrupt:
-        logger.warning("Interrupted by user.")
-
-    except Exception as exc:
-        logger.exception(
-            "Fatal application error: %s",
-            exc,
+        logger.info(
+            "FILE EXISTS: %s",
+            output_path,
         )
-        raise
+
+        manifest[
+            manifest_key
+        ] = {
+            "message_id": int(message_id),
+         
