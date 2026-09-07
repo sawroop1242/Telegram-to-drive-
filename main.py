@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import mimetypes
 import os
@@ -10,126 +11,242 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError, RPCError
 
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 TELEGRAM_SESSION = os.environ["TELEGRAM_SESSION"]
 
 CHANNEL_ID = -1003708183148
-ARCHIVE_ROOT = Path("./downloads/Telegram_Archive/GK-GS/parmar_ssc")
+
+ARCHIVE_ROOT = Path("./downloads/Telegram_Archive/GK-GS")
+
 MAX_RETRIES = 5
 RETRY_DELAY = 5
 DOWNLOAD_DELAY = 1
+
+# 0 = unlimited
 MAX_FILES = 0
 
-SUBJECT_MAP = {
-    "Physics": ["physics", "physics class", "भौतिक विज्ञान", "भौतिकी"],
-    "Chemistry": ["chemistry", "chemistry class", "रसायन विज्ञान"],
-    "Biology": ["biology", "biology class", "जीव विज्ञान", "जीवविज्ञान"],
-    "Static_GK": [
-        "static gk", "static-gk", "staticgk", "static general knowledge",
-        "static facts", "स्थिर सामान्य ज्ञान", "general knowledge", "सामान्य ज्ञान",
-        "gk", "जीके", "polity", "राजव्यवस्था", "constitution", "संविधान",
-        "history", "इतिहास", "geography", "भूगोल", "economics", "अर्थशास्त्र",
-        "banking", "बैंकिंग", "award", "पुरस्कार", "important days", "महत्वपूर्ण दिवस",
-        "national symbols", "राष्ट्रीय प्रतीक", "sport", "खेल", "olympic", "olympics"
-    ],
-}
+# IMPORTANT:
+# Only files matching one of SUBJECT_MAP are downloaded.
+ONLY_MATCHED_FILES = True
 
-STRONG_LABELS = {
-    "Physics": ["physics", "physics class", "भौतिक विज्ञान", "भौतिकी"],
-    "Chemistry": ["chemistry", "chemistry class", "रसायन विज्ञान"],
-    "Biology": ["biology", "biology class", "जीव विज्ञान", "जीवविज्ञान"],
-    "Static_GK": [
-        "static gk", "static-gk", "staticgk", "static general knowledge",
-        "static facts", "स्थिर सामान्य ज्ञान"
-    ],
-}
 
-VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".3gp")
+# ============================================================
+# LOGGING
+# ============================================================
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+
 logger = logging.getLogger("telegram_archive")
 
+
+# ============================================================
+# SUBJECTS
+# ============================================================
+
+SUBJECT_MAP = {
+    "Ancient_History": [
+        "ancient history", "ancient_history", "ancienthistory", "प्राचीन इतिहास",
+    ],
+    "Medieval_History": [
+        "medieval history", "medieval_history", "medievalhistory", "मध्यकालीन इतिहास",
+    ],
+    "Modern_History": [
+        "modern history", "modern_history", "modernhistory", "आधुनिक इतिहास",
+    ],
+    "Polity": [
+        "polity", "indian polity", "constitution", "constitutional", "राजव्यवस्था", "संविधान",
+    ],
+    "Geography": [
+        "geography", "geo", "भूगोल",
+    ],
+    "Economics": [
+        "economics", "economy", "indian economy", "अर्थशास्त्र", "अर्थव्यवस्था",
+    ],
+    "Physics": [
+        "physics", "भौतिक विज्ञान",
+    ],
+    "Chemistry": [
+        "chemistry", "रसायन विज्ञान",
+    ],
+    "Biology": [
+        "biology", "zoology", "botany", "जीव विज्ञान", "वनस्पति विज्ञान", "प्राणी विज्ञान",
+    ],
+    "Static_GK": [
+        "static gk", "static_gk", "staticgk", "static general knowledge", "स्टेटिक जीके", "स्थैतिक सामान्य ज्ञान",
+    ],
+    "Computer": [
+        "computer", "computers", "computer awareness", "कंप्यूटर",
+    ],
+}
+
+
+# ============================================================
+# MANIFEST
+# ============================================================
+# This is ONLY a local-run manifest.
+# It does NOT check Google Drive.
+
+MANIFEST_PATH = ARCHIVE_ROOT / ".download_manifest.json"
+
+
+def load_manifest():
+    if not MANIFEST_PATH.exists():
+        return {}
+    try:
+        with MANIFEST_PATH.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        logger.warning("Could not load manifest: %s", exc)
+        return {}
+
+
+def save_manifest(manifest):
+    ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
+    temp_path = MANIFEST_PATH.with_suffix(".tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        temp_path.replace(MANIFEST_PATH)
+    except Exception as exc:
+        logger.warning("Could not save manifest: %s", exc)
+
+
+# ============================================================
+# TEXT UTILITIES
+# ============================================================
 
 def normalize_text(text):
     if not text:
         return ""
-    text = str(text).lower().replace("–", "-").replace("—", "-")
+    text = str(text).lower()
+    text = text.replace("_", " ")
+    text = text.replace("-", " ")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
 def sanitize_filename(filename):
-    filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", filename or "file")
-    filename = re.sub(r"\s+", " ", filename).strip().rstrip(". ")
-    return filename or "file"
+    if not filename:
+        filename = "unnamed_file"
+    filename = str(filename)
+    filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", filename)
+    filename = re.sub(r"\s+", " ", filename).strip()
+    filename = filename.rstrip(". ")
+    return filename or "unnamed_file"
 
 
-def message_text(message):
+def get_message_text(message):
     parts = []
-    if getattr(message, "file", None) and getattr(message.file, "name", None):
-        parts.append(message.file.name)
-    if getattr(message, "raw_text", None):
-        parts.append(message.raw_text)
-    return " ".join(parts)
+    if getattr(message, "text", None):
+        parts.append(message.text)
+    if getattr(message, "message", None):
+        parts.append(message.message)
+    file_obj = getattr(message, "file", None)
+    if file_obj:
+        name = getattr(file_obj, "name", None)
+        if name:
+            parts.append(name)
+    return " ".join(p for p in parts if p)
 
+
+# ============================================================
+# SUBJECT CLASSIFICATION
+# ============================================================
 
 def classify_subject(message):
-    text = normalize_text(message_text(message))
+    """Return an allowed subject, or None when unmatched."""
+    text = normalize_text(get_message_text(message))
     if not text:
         return None
 
-    for subject, labels in STRONG_LABELS.items():
-        if any(normalize_text(label) in text for label in labels):
-            return subject
+    subjects = sorted(
+        SUBJECT_MAP.items(),
+        key=lambda item: max(len(normalize_text(alias)) for alias in item[1]),
+        reverse=True,
+    )
 
-    scores = {}
-    for subject, keywords in SUBJECT_MAP.items():
-        scores[subject] = sum(1 for keyword in keywords if normalize_text(keyword) in text)
+    for subject, aliases in subjects:
+        for alias in aliases:
+            if normalize_text(alias) in text:
+                return subject
+    return None
 
-    subject, score = max(scores.items(), key=lambda item: item[1])
-    return subject if score > 0 else None
 
+# ============================================================
+# FILE TYPE
+# ============================================================
 
 def detect_file_type(message):
     file_obj = getattr(message, "file", None)
     if not file_obj:
         return None
 
-    mime = (getattr(file_obj, "mime_type", None) or "").lower()
-    name = (getattr(file_obj, "name", None) or "").lower()
+    mime_type = getattr(file_obj, "mime_type", None)
+    name = getattr(file_obj, "name", None) or ""
+    name_lower = name.lower()
 
-    if mime == "application/pdf" or name.endswith(".pdf"):
+    if mime_type == "application/pdf" or name_lower.endswith(".pdf"):
         return "PDF"
 
-    if getattr(message, "video", None) or mime.startswith("video/") or name.endswith(VIDEO_EXTENSIONS):
+    if (
+        getattr(message, "video", None)
+        or (mime_type and mime_type.startswith("video/"))
+        or name_lower.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".3gp"))
+    ):
         return "VIDEO"
 
     return None
 
 
-def original_filename(message):
-    name = getattr(getattr(message, "file", None), "name", None)
-    if name:
-        return sanitize_filename(name)
-    mime = getattr(getattr(message, "file", None), "mime_type", None) or ""
-    return "telegram_file" + (mimetypes.guess_extension(mime) or "")
+# ============================================================
+# FILE NAME
+# ============================================================
+
+def get_original_filename(message):
+    file_obj = getattr(message, "file", None)
+    if file_obj:
+        name = getattr(file_obj, "name", None)
+        if name:
+            return sanitize_filename(name)
+
+    mime_type = getattr(file_obj, "mime_type", None) if file_obj else None
+    extension = mimetypes.guess_extension(mime_type or "") or ""
+    if extension:
+        return f"telegram_file{extension}"
+    return "telegram_file"
 
 
 def build_filename(message):
-    original = original_filename(message)
-    stem, ext = os.path.splitext(original)
-    if not ext:
-        ext = ".mp4" if detect_file_type(message) == "VIDEO" else ".pdf"
-    return sanitize_filename(f"{stem}_msg_{message.id}{ext}")
+    original = get_original_filename(message)
+    return sanitize_filename(f"{original}_msg_{message.id}")
 
 
-def destination(subject, file_type):
-    folder = "Videos" if file_type == "VIDEO" else "PDFs"
-    return ARCHIVE_ROOT / subject / folder
+# ============================================================
+# DESTINATION
+# ============================================================
+
+def get_destination(subject, file_type):
+    if file_type == "VIDEO":
+        return ARCHIVE_ROOT / subject / "Videos"
+    if file_type == "PDF":
+        return ARCHIVE_ROOT / subject / "PDFs"
+    return None
 
 
-class Progress:
+# ============================================================
+# PROGRESS
+# ============================================================
+
+class DownloadProgress:
     def __init__(self, filename):
         self.filename = filename
         self.last_percent = -1
@@ -138,116 +255,214 @@ class Progress:
         if not total:
             return
         percent = int(current * 100 / total)
-        if percent == 100 or percent - self.last_percent >= 10:
-            self.last_percent = percent
-            logger.info("Downloading %s %d%% (%.1f/%.1f MB)", self.filename, percent, current / 1048576, total / 1048576)
+        rounded = (percent // 10) * 10
+        if rounded != self.last_percent:
+            self.last_percent = rounded
+            logger.info(
+                "Downloading %-70s %3d%% (%.1f/%.1f MB)",
+                self.filename,
+                percent,
+                current / (1024 * 1024),
+                total / (1024 * 1024),
+            )
 
+
+# ============================================================
+# DOWNLOAD
+# ============================================================
 
 async def download_file(client, message, output_path):
+    filename = output_path.name
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            logger.info("Download attempt %d/%d: %s", attempt, MAX_RETRIES, output_path.name)
+            logger.info("Download attempt %d/%d: %s", attempt, MAX_RETRIES, filename)
             await client.download_media(
                 message,
                 file=str(output_path),
-                progress_callback=Progress(output_path.name),
+                progress_callback=DownloadProgress(filename),
             )
-            if not output_path.exists() or output_path.stat().st_size <= 0:
-                raise RuntimeError("Downloaded file is missing or empty")
-            logger.info("SUCCESS: %s (%.2f MB)", output_path.name, output_path.stat().st_size / 1048576)
+
+            if not output_path.exists():
+                raise RuntimeError("Download completed but file does not exist.")
+
+            size = output_path.stat().st_size
+            if size <= 0:
+                raise RuntimeError("Downloaded file is empty.")
+
+            logger.info("SUCCESS: %s (%.2f MB)", filename, size / 1024 / 1024)
             return True
+
         except FloodWaitError as exc:
-            wait = int(exc.seconds) + 2
-            logger.warning("Telegram FloodWait: waiting %d seconds", wait)
-            await asyncio.sleep(wait)
-        except (RPCError, asyncio.TimeoutError, TimeoutError, ConnectionError, OSError) as exc:
-            logger.warning("Download error on attempt %d/%d: %s", attempt, MAX_RETRIES, exc)
+            wait_time = int(exc.seconds) + 2
+            logger.warning("Telegram FloodWait: waiting %d seconds", wait_time)
+            await asyncio.sleep(wait_time)
+
+        except (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError, RPCError) as exc:
+            logger.warning("Download error (attempt %d/%d): %s", attempt, MAX_RETRIES, exc)
             if attempt < MAX_RETRIES:
                 await asyncio.sleep(RETRY_DELAY)
+
+        except TypeError as exc:
+            logger.error("Fatal download API error: %s", exc)
+            return False
+
         except Exception as exc:
-            logger.exception("Unexpected download error on attempt %d/%d: %s", attempt, MAX_RETRIES, exc)
+            logger.exception("Unexpected download error (attempt %d/%d): %s", attempt, MAX_RETRIES, exc)
             if attempt < MAX_RETRIES:
                 await asyncio.sleep(RETRY_DELAY)
 
         if output_path.exists():
             try:
                 output_path.unlink()
-            except OSError:
+            except Exception:
                 pass
 
-    logger.error("FAILED after %d attempts: %s", MAX_RETRIES, output_path.name)
+    logger.error("FAILED after %d attempts: %s", MAX_RETRIES, filename)
     return False
 
 
-async def main():
-    ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
+# ============================================================
+# PROCESS MESSAGE
+# ============================================================
 
+async def process_message(client, message, manifest):
+    file_type = detect_file_type(message)
+
+    if file_type is None:
+        return "SKIP_OTHER"
+
+    subject = classify_subject(message)
+    if subject is None:
+        original = get_original_filename(message)
+        logger.info("[%s] SKIP [NO ALLOWED SUBJECT] [%s] %s", message.id, file_type, original)
+        return "SKIP_SUBJECT"
+
+    destination = get_destination(subject, file_type)
+    if destination is None:
+        return "SKIP_OTHER"
+
+    destination.mkdir(parents=True, exist_ok=True)
+    filename = build_filename(message)
+    output_path = destination / filename
+    message_key = str(message.id)
+
+    if message_key in manifest:
+        logger.info("[%s] SKIP [LOCAL MANIFEST] [%s] %s", message.id, file_type, filename)
+        return "SKIP_MANIFEST"
+
+    if output_path.exists():
+        size = output_path.stat().st_size
+        if size > 0:
+            logger.info("[%s] SKIP [LOCAL FILE EXISTS] [%s] %s", message.id, file_type, filename)
+            manifest[message_key] = {
+                "filename": filename,
+                "subject": subject,
+                "file_type": file_type,
+                "status": "downloaded",
+            }
+            save_manifest(manifest)
+            return "SKIP_LOCAL"
+
+    logger.info("[%s] [%s] [%s] %s", message.id, subject, file_type, filename)
+
+    success = await download_file(client, message, output_path)
+    if not success:
+        return "FAILED"
+
+    manifest[message_key] = {
+        "filename": filename,
+        "subject": subject,
+        "file_type": file_type,
+        "status": "downloaded",
+    }
+    save_manifest(manifest)
+
+    await asyncio.sleep(DOWNLOAD_DELAY)
+    return "DOWNLOADED"
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+async def main():
     logger.info("=" * 70)
     logger.info("Telegram Archive Downloader")
     logger.info("=" * 70)
     logger.info("Channel ID : %s", CHANNEL_ID)
     logger.info("Archive    : %s", ARCHIVE_ROOT.resolve())
-    logger.info("Subjects   : %s", ", ".join(SUBJECT_MAP))
+    logger.info("Max retry  : %s", MAX_RETRIES)
+    logger.info("Only match : %s", ONLY_MATCHED_FILES)
+    logger.info("Subjects   : %d", len(SUBJECT_MAP))
     logger.info("Drive check: DISABLED")
-    logger.info("Drive upload is handled by rclone in GitHub Actions")
+    logger.info("Google Drive upload is handled separately by rclone.")
 
-    client = TelegramClient(StringSession(TELEGRAM_SESSION), API_ID, API_HASH, timeout=120)
+    ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
+    manifest = load_manifest()
+
+    client = TelegramClient(
+        StringSession(TELEGRAM_SESSION),
+        API_ID,
+        API_HASH,
+    )
 
     try:
         logger.info("Connecting to Telegram...")
         await client.start()
+        logger.info("Telegram authorization successful.")
+
         entity = await client.get_entity(CHANNEL_ID)
         logger.info("Target resolved: %s", getattr(entity, "title", str(entity)))
         logger.info("Scanning messages...")
 
-        scanned = downloaded = skipped_subject = skipped_other = failed = 0
+        counters = {
+            "scanned": 0,
+            "downloaded": 0,
+            "skipped_subject": 0,
+            "skipped_manifest": 0,
+            "skipped_local": 0,
+            "skipped_other": 0,
+            "failed": 0,
+        }
+
+        processed = 0
 
         async for message in client.iter_messages(entity, reverse=True):
-            scanned += 1
+            counters["scanned"] += 1
 
-            if MAX_FILES and downloaded >= MAX_FILES:
+            if MAX_FILES > 0 and processed >= MAX_FILES:
+                logger.info("MAX_FILES reached: %d", MAX_FILES)
                 break
 
-            file_type = detect_file_type(message)
-            if file_type is None:
-                skipped_other += 1
-                continue
+            result = await process_message(client, message, manifest)
 
-            # IMPORTANT: classify before downloading.
-            subject = classify_subject(message)
-            if subject is None:
-                skipped_subject += 1
-                logger.info("[%s] SKIP [NO ALLOWED SUBJECT] [%s] %s", message.id, file_type, original_filename(message))
-                continue
-
-            target_dir = destination(subject, file_type)
-            target_dir.mkdir(parents=True, exist_ok=True)
-            filename = build_filename(message)
-            output_path = target_dir / filename
-
-            logger.info("[%s] [%s] [%s] %s", message.id, subject, file_type, filename)
-
-            # This is only a local filesystem check. There is NO Drive check.
-            if output_path.exists() and output_path.stat().st_size > 0:
-                logger.info("[%s] SKIP [LOCAL FILE EXISTS] %s", message.id, filename)
-                continue
-
-            if await download_file(client, message, output_path):
-                downloaded += 1
-            else:
-                failed += 1
-
-            await asyncio.sleep(DOWNLOAD_DELAY)
+            if result == "DOWNLOADED":
+                counters["downloaded"] += 1
+                processed += 1
+            elif result == "SKIP_SUBJECT":
+                counters["skipped_subject"] += 1
+            elif result == "SKIP_MANIFEST":
+                counters["skipped_manifest"] += 1
+            elif result == "SKIP_LOCAL":
+                counters["skipped_local"] += 1
+            elif result == "SKIP_OTHER":
+                counters["skipped_other"] += 1
+            elif result == "FAILED":
+                counters["failed"] += 1
 
         logger.info("=" * 70)
         logger.info("SCAN COMPLETE")
-        logger.info("Messages scanned : %d", scanned)
-        logger.info("Downloaded       : %d", downloaded)
-        logger.info("No subject       : %d", skipped_subject)
-        logger.info("Other skipped    : %d", skipped_other)
-        logger.info("Failed           : %d", failed)
+        logger.info("Messages scanned : %d", counters["scanned"])
+        logger.info("Downloaded       : %d", counters["downloaded"])
+        logger.info("No subject       : %d", counters["skipped_subject"])
+        logger.info("Manifest skipped : %d", counters["skipped_manifest"])
+        logger.info("Local skipped    : %d", counters["skipped_local"])
+        logger.info("Other skipped    : %d", counters["skipped_other"])
+        logger.info("Failed           : %d", counters["failed"])
         logger.info("Google Drive     : NOT CHECKED")
         logger.info("=" * 70)
+
     finally:
         await client.disconnect()
 
