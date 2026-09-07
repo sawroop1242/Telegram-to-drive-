@@ -1,14 +1,13 @@
 name: Telegram to GDrive Archiver
 
-# This allows you to trigger the script manually from the Actions tab
 on:
   workflow_dispatch:
 
 jobs:
   scrape_and_upload:
     runs-on: ubuntu-latest
-    
-    # Pass our hidden secrets into the server environment
+    timeout-minutes: 360
+
     env:
       API_ID: ${{ secrets.API_ID }}
       API_HASH: ${{ secrets.API_HASH }}
@@ -20,42 +19,95 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: Install Python Dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install telethon cryptg
 
-      - name: Install Rclone and FUSE
+      - name: Install Rclone
         run: |
           sudo apt-get update
-          sudo apt-get install -y rclone fuse3
+          sudo apt-get install -y rclone
+          rclone version
 
-      - name: Configure Rclone Connection
+      - name: Configure Rclone gdrive1
+        shell: bash
         run: |
-          mkdir -p ~/.config/rclone
-          cat << EOF > ~/.config/rclone/rclone.conf
+          set -euo pipefail
+          mkdir -p "$HOME/.config/rclone"
+          cat > "$HOME/.config/rclone/rclone.conf" <<EOF
           [gdrive1]
           type = drive
           scope = drive
-          token = $RCLONE_CONF_JSON
+          token = ${RCLONE_CONF_JSON}
           EOF
 
-      - name: Mount Google Drive
-        run: |
-          # Replicate the Colab folder structure
-          sudo mkdir -p /content/drive/MyDrive
-          sudo chown -R $USER:$USER /content
-          
-          # Mount the drive in the background via daemon
-          rclone mount gdrive1: /content/drive/MyDrive --daemon --vfs-cache-mode writes
-          
-          # Give it a few seconds to establish the connection
-          sleep 5 
+          echo "Configured remotes:"
+          rclone listremotes
+
+          echo "Testing gdrive1 connection..."
+          rclone about gdrive1:
 
       - name: Run Telegram Scraper
         run: |
           python main.py
-          
+
+      - name: Verify Downloaded Archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="./downloads/Telegram_Archive/GK-GS/parmar_ssc"
+
+          echo "Local archive: $ROOT"
+          if [ ! -d "$ROOT" ]; then
+            echo "ERROR: archive directory does not exist"
+            exit 1
+          fi
+
+          echo "Downloaded files:"
+          find "$ROOT" -type f -not -name '.DS_Store' -print
+
+          echo "File counts by type:"
+          find "$ROOT" -type f \( -iname '*.mp4' -o -iname '*.mkv' -o -iname '*.avi' -o -iname '*.mov' -o -iname '*.webm' -o -iname '*.m4v' -o -iname '*.3gp' \) | wc -l | xargs echo "Videos:"
+          find "$ROOT" -type f -iname '*.pdf' | wc -l | xargs echo "PDFs:"
+
+      - name: Upload Archive to Google Drive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LOCAL_ROOT="./downloads/Telegram_Archive/GK-GS/parmar_ssc"
+          REMOTE_ROOT="gdrive1:Telegram_Archive/GK-GS/parmar_ssc"
+
+          echo "=============================================="
+          echo "Uploading Telegram archive to Google Drive"
+          echo "Local : $LOCAL_ROOT"
+          echo "Remote: $REMOTE_ROOT"
+          echo "=============================================="
+
+          # Upload files only. No Drive duplicate/existence check is performed
+          # by main.py. Rclone handles the actual transfer.
+          rclone copy "$LOCAL_ROOT" "$REMOTE_ROOT" \
+            --create-empty-src-dirs \
+            --progress \
+            --transfers 2 \
+            --checkers 4 \
+            --drive-chunk-size 64M \
+            --retries 5 \
+            --low-level-retries 10 \
+            --retries-sleep 10s
+
+      - name: Verify Google Drive Upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          REMOTE_ROOT="gdrive1:Telegram_Archive/GK-GS/parmar_ssc"
+
+          echo "Google Drive archive listing:"
+          rclone size "$REMOTE_ROOT"
+          rclone lsd "$REMOTE_ROOT" || true
+          echo "Upload completed successfully."
