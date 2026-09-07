@@ -53,9 +53,9 @@ jobs:
           echo "Testing gdrive1 connection..."
           rclone about gdrive1:
 
-      - name: Run Telegram Scraper
+      - name: Run Parallel Telegram Scraper
         run: |
-          python main.py
+          python parallel_runner.py
 
       - name: Verify Downloaded Archive
         shell: bash
@@ -85,4 +85,4 @@ jobs:
           echo "Google Drive archive summary:"
           rclone size "$REMOTE_ROOT"
           rclone lsd "$REMOTE_ROOT" || true
-          echo "Immediate per-file upload workflow completed."
+          echo "Parallel per-file upload workflow completed."
