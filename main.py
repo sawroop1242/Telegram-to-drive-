@@ -1,297 +1,259 @@
+import asyncio
+import logging
+import mimetypes
+import os
+import re
+import sys
+from pathlib import Path
+
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-import os
-import asyncio
-import subprocess
-import re
+from telethon.errors import FloodWaitError, RPCError
 
-# --- Configuration (Pulled from GitHub Secrets) ---
-api_id = int(os.environ['API_ID'])
-api_hash = os.environ['API_HASH']
-session_string = os.environ['TELEGRAM_SESSION']
+API_ID = int(os.environ["API_ID"])
+API_HASH = os.environ["API_HASH"]
+TELEGRAM_SESSION = os.environ["TELEGRAM_SESSION"]
 
-# Target channel ID
-channel_id = -1003708183148
+CHANNEL_ID = -1003708183148
+ARCHIVE_ROOT = Path("./downloads/Telegram_Archive/GK-GS/parmar_ssc")
+MAX_RETRIES = 5
+RETRY_DELAY = 5
+DOWNLOAD_DELAY = 1
+MAX_FILES = 0
 
-# Local staging directory on the GitHub Action VM runner
-save_path = './downloads/Telegram_Archive/GK-GS/parmar_ssc/'
-os.makedirs(save_path, exist_ok=True)
-
-# Google Drive rclone remote/path
-remote_drive_name = "gdrive1"
-remote_drive_path = f"{remote_drive_name}:Telegram_Archive/GK-GS/parmar_ssc/"
-
-# -----------------------------------------------------------------------------
-# SUBJECT FILTER
-# Only Physics, Chemistry, Biology and Static GK material is downloaded.
-# The filter checks the Telegram filename + caption/message text.
-# -----------------------------------------------------------------------------
-
-SUBJECT_KEYWORDS = {
-    "physics": [
-        "physics", "phys", "भौतिक", "भौतिकी", "गति", "motion", "force", "बल",
-        "work", "कार्य", "energy", "ऊर्जा", "power", "शक्ति", "gravitation",
-        "gravity", "गुरुत्व", "heat", "ऊष्मा", "temperature", "तापमान", "wave",
-        "तरंग", "sound", "ध्वनि", "light", "प्रकाश", "optics", "optics", "lens",
-        "दर्पण", "mirror", "electricity", "विद्युत", "current", "धारा", "magnet",
-        "चुंबक", "magnetic", "electromagnetism", "resistance", "प्रतिरोध", "voltage",
-        "वोल्टेज", "semiconductor", "nuclear", "परमाणु", "radioactivity", "इलेक्ट्रॉन"
+SUBJECT_MAP = {
+    "Physics": ["physics", "physics class", "भौतिक विज्ञान", "भौतिकी"],
+    "Chemistry": ["chemistry", "chemistry class", "रसायन विज्ञान"],
+    "Biology": ["biology", "biology class", "जीव विज्ञान", "जीवविज्ञान"],
+    "Static_GK": [
+        "static gk", "static-gk", "staticgk", "static general knowledge",
+        "static facts", "स्थिर सामान्य ज्ञान", "general knowledge", "सामान्य ज्ञान",
+        "gk", "जीके", "polity", "राजव्यवस्था", "constitution", "संविधान",
+        "history", "इतिहास", "geography", "भूगोल", "economics", "अर्थशास्त्र",
+        "banking", "बैंकिंग", "award", "पुरस्कार", "important days", "महत्वपूर्ण दिवस",
+        "national symbols", "राष्ट्रीय प्रतीक", "sport", "खेल", "olympic", "olympics"
     ],
-    "chemistry": [
-        "chemistry", "chem", "रसायन", "रसायन विज्ञान", "atom", "परमाणु", "molecule",
-        "अणु", "periodic", "आवर्त सारणी", "element", "तत्व", "compound", "यौगिक",
-        "chemical", "रासायनिक", "acid", "अम्ल", "base", "क्षार", "salt", "लवण",
-        "reaction", "अभिक्रिया", "oxidation", "अपचयन", "reduction", "redox", "carbon",
-        "कार्बन", "organic", "कार्बनिक", "inorganic", "अकार्बनिक", "metallurgy",
-        "धातु", "non metal", "अधातु", "catalyst", "उत्प्रेरक", "solution", "विलयन"
-    ],
-    "biology": [
-        "biology", "bio", "जीव विज्ञान", "जीवविज्ञान", "cell", "कोशिका", "tissue",
-        "ऊतक", "plant", "पादप", "वनस्पति", "animal", "प्राणी", "human body", "मानव शरीर",
-        "human", "मानव", "blood", "रक्त", "heart", "हृदय", "brain", "मस्तिष्क", "digest",
-        "पाचन", "respiration", "श्वसन", "reproduction", "प्रजनन", "genetics", "आनुवंशिकी",
-        "dna", "rna", "chromosome", "गुणसूत्र", "hormone", "हार्मोन", "enzyme", "एंजाइम",
-        "disease", "रोग", "vitamin", "विटामिन", "nutrition", "पोषण", "ecology", "पारिस्थितिकी",
-        "evolution", "विकासवाद", "botany", "zoology", "microbiology", "bacteria", "virus"
-    ],
-    "static_gk": [
-        "static gk", "static-gk", "staticgk", "static general knowledge", "स्थिर सामान्य ज्ञान",
-        "general knowledge", "general knowledge", "सामान्य ज्ञान", "gk", "जीके",
-        "indian polity", "polity", "राजव्यवस्था", "संविधान", "constitution", "fundamental rights",
-        "मौलिक अधिकार", "parliament", "संसद", "president", "राष्ट्रपति", "prime minister",
-        "प्रधानमंत्री", "supreme court", "सर्वोच्च न्यायालय", "history", "इतिहास", "ancient history",
-        "प्राचीन इतिहास", "medieval history", "मध्यकालीन इतिहास", "modern history", "आधुनिक इतिहास",
-        "geography", "भूगोल", "river", "नदी", "dam", "बांध", "lake", "झील", "mountain",
-        "पर्वत", "plateau", "पठार", "desert", "मरुस्थल", "national park", "राष्ट्रीय उद्यान",
-        "wildlife sanctuary", "अभयारण्य", "biosphere reserve", "biosphere", "राज्य", "capital",
-        "राजधानी", "currency", "मुद्रा", "country", "देश", "world", "विश्व", "continent",
-        "महाद्वीप", "economics", "अर्थशास्त्र", "banking", "बैंकिंग", "rbi", "भारतीय रिजर्व बैंक",
-        "award", "पुरस्कार", "book", "पुस्तक", "author", "लेखक", "important days", "महत्वपूर्ण दिवस",
-        "national symbols", "राष्ट्रीय प्रतीक", "first in india", "भारत में प्रथम", "first in world",
-        "भारत में प्रथम", "world records", "sport", "खेल", "olympics", "olympic", "static facts"
-    ]
 }
 
-# Strong subject labels are checked first so words such as "atom" do not
-# accidentally classify an unrelated GK message as Chemistry.
-STRONG_SUBJECT_LABELS = [
-    "physics", "physics class", "chemistry", "chemistry class", "biology", "biology class",
-    "भौतिक विज्ञान", "भौतिकी", "रसायन विज्ञान", "जीव विज्ञान", "जीवविज्ञान",
-    "static gk", "static-gk", "staticgk", "static general knowledge", "static facts",
-    "स्थिर सामान्य ज्ञान"
-]
+STRONG_LABELS = {
+    "Physics": ["physics", "physics class", "भौतिक विज्ञान", "भौतिकी"],
+    "Chemistry": ["chemistry", "chemistry class", "रसायन विज्ञान"],
+    "Biology": ["biology", "biology class", "जीव विज्ञान", "जीवविज्ञान"],
+    "Static_GK": [
+        "static gk", "static-gk", "staticgk", "static general knowledge",
+        "static facts", "स्थिर सामान्य ज्ञान"
+    ],
+}
+
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".3gp")
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger("telegram_archive")
 
 
 def normalize_text(text):
-    """Normalize Telegram titles/captions for reliable keyword matching."""
     if not text:
         return ""
-    text = text.lower().replace("–", "-").replace("—", "-")
+    text = str(text).lower().replace("–", "-").replace("—", "-")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
-def classify_message(message):
-    """Return Physics/Chemistry/Biology/Static GK or None."""
+def sanitize_filename(filename):
+    filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", filename or "file")
+    filename = re.sub(r"\s+", " ", filename).strip().rstrip(". ")
+    return filename or "file"
+
+
+def message_text(message):
     parts = []
-
-    if message.file and message.file.name:
+    if getattr(message, "file", None) and getattr(message.file, "name", None):
         parts.append(message.file.name)
-
-    if message.raw_text:
+    if getattr(message, "raw_text", None):
         parts.append(message.raw_text)
+    return " ".join(parts)
 
-    text = normalize_text(" ".join(parts))
+
+def classify_subject(message):
+    text = normalize_text(message_text(message))
     if not text:
         return None
 
-    # Explicit subject labels get priority.
-    for label in STRONG_SUBJECT_LABELS:
-        if label in text:
-            label_lower = label.lower()
-            if "physics" in label_lower or "भौतिक" in label_lower:
-                return "Physics"
-            if "chemistry" in label_lower or "रसायन" in label_lower:
-                return "Chemistry"
-            if "biology" in label_lower or "जीव" in label_lower:
-                return "Biology"
-            return "Static GK"
+    for subject, labels in STRONG_LABELS.items():
+        if any(normalize_text(label) in text for label in labels):
+            return subject
 
-    # Otherwise score keyword matches. Require at least one meaningful match.
     scores = {}
-    for subject, keywords in SUBJECT_KEYWORDS.items():
-        score = 0
-        for keyword in keywords:
-            keyword = normalize_text(keyword)
-            if keyword and keyword in text:
-                score += 1
-        scores[subject] = score
+    for subject, keywords in SUBJECT_MAP.items():
+        scores[subject] = sum(1 for keyword in keywords if normalize_text(keyword) in text)
 
-    best_subject, best_score = max(scores.items(), key=lambda item: item[1])
-    if best_score == 0:
+    subject, score = max(scores.items(), key=lambda item: item[1])
+    return subject if score > 0 else None
+
+
+def detect_file_type(message):
+    file_obj = getattr(message, "file", None)
+    if not file_obj:
         return None
 
-    return {
-        "physics": "Physics",
-        "chemistry": "Chemistry",
-        "biology": "Biology",
-        "static_gk": "Static GK"
-    }[best_subject]
+    mime = (getattr(file_obj, "mime_type", None) or "").lower()
+    name = (getattr(file_obj, "name", None) or "").lower()
+
+    if mime == "application/pdf" or name.endswith(".pdf"):
+        return "PDF"
+
+    if getattr(message, "video", None) or mime.startswith("video/") or name.endswith(VIDEO_EXTENSIONS):
+        return "VIDEO"
+
+    return None
 
 
-def get_already_downloaded_files():
-    """Query Google Drive through rclone and return existing filenames."""
-    print(f"Scanning Google Drive remote folder: [{remote_drive_path}]")
-    existing_files = set()
+def original_filename(message):
+    name = getattr(getattr(message, "file", None), "name", None)
+    if name:
+        return sanitize_filename(name)
+    mime = getattr(getattr(message, "file", None), "mime_type", None) or ""
+    return "telegram_file" + (mimetypes.guess_extension(mime) or "")
 
-    try:
-        result = subprocess.run(
-            ['rclone', 'lsf', remote_drive_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
 
-        if result.returncode != 0:
-            print(f"⚠️ Rclone listing failed: {result.stderr.strip()}")
-            return existing_files
+def build_filename(message):
+    original = original_filename(message)
+    stem, ext = os.path.splitext(original)
+    if not ext:
+        ext = ".mp4" if detect_file_type(message) == "VIDEO" else ".pdf"
+    return sanitize_filename(f"{stem}_msg_{message.id}{ext}")
 
-        for line in result.stdout.splitlines():
-            if line.strip():
-                existing_files.add(line.strip())
 
-        print(f"Index successfully populated: {len(existing_files)} files tracked on Google Drive.")
-    except Exception as e:
-        print(f"⚠️ Unexpected Rclone error: {e}")
+def destination(subject, file_type):
+    folder = "Videos" if file_type == "VIDEO" else "PDFs"
+    return ARCHIVE_ROOT / subject / folder
 
-    return existing_files
+
+class Progress:
+    def __init__(self, filename):
+        self.filename = filename
+        self.last_percent = -1
+
+    def __call__(self, current, total):
+        if not total:
+            return
+        percent = int(current * 100 / total)
+        if percent == 100 or percent - self.last_percent >= 10:
+            self.last_percent = percent
+            logger.info("Downloading %s %d%% (%.1f/%.1f MB)", self.filename, percent, current / 1048576, total / 1048576)
+
+
+async def download_file(client, message, output_path):
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            logger.info("Download attempt %d/%d: %s", attempt, MAX_RETRIES, output_path.name)
+            await client.download_media(
+                message,
+                file=str(output_path),
+                progress_callback=Progress(output_path.name),
+            )
+            if not output_path.exists() or output_path.stat().st_size <= 0:
+                raise RuntimeError("Downloaded file is missing or empty")
+            logger.info("SUCCESS: %s (%.2f MB)", output_path.name, output_path.stat().st_size / 1048576)
+            return True
+        except FloodWaitError as exc:
+            wait = int(exc.seconds) + 2
+            logger.warning("Telegram FloodWait: waiting %d seconds", wait)
+            await asyncio.sleep(wait)
+        except (RPCError, asyncio.TimeoutError, TimeoutError, ConnectionError, OSError) as exc:
+            logger.warning("Download error on attempt %d/%d: %s", attempt, MAX_RETRIES, exc)
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY)
+        except Exception as exc:
+            logger.exception("Unexpected download error on attempt %d/%d: %s", attempt, MAX_RETRIES, exc)
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY)
+
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except OSError:
+                pass
+
+    logger.error("FAILED after %d attempts: %s", MAX_RETRIES, output_path.name)
+    return False
 
 
 async def main():
-    #drive_files = get_already_downloaded_files()
+    ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
 
-    print("Initializing Telethon connection...")
-    client = TelegramClient(
-        StringSession(session_string),
-        api_id,
-        api_hash,
-        timeout=120
-    )
-    await client.connect()
+    logger.info("=" * 70)
+    logger.info("Telegram Archive Downloader")
+    logger.info("=" * 70)
+    logger.info("Channel ID : %s", CHANNEL_ID)
+    logger.info("Archive    : %s", ARCHIVE_ROOT.resolve())
+    logger.info("Subjects   : %s", ", ".join(SUBJECT_MAP))
+    logger.info("Drive check: DISABLED")
+    logger.info("Drive upload is handled by rclone in GitHub Actions")
 
-    if not await client.is_user_authorized():
-        print("CRITICAL ERROR: Telegram String Session key is invalid or expired.")
-        return
+    client = TelegramClient(StringSession(TELEGRAM_SESSION), API_ID, API_HASH, timeout=120)
 
-    print(f"Authorized! Parsing target feed ID: {channel_id}...")
-    print("FILTER: Physics + Chemistry + Biology + Static GK only")
+    try:
+        logger.info("Connecting to Telegram...")
+        await client.start()
+        entity = await client.get_entity(CHANNEL_ID)
+        logger.info("Target resolved: %s", getattr(entity, "title", str(entity)))
+        logger.info("Scanning messages...")
 
-    scanned = 0
-    selected = 0
-    skipped_subject = 0
+        scanned = downloaded = skipped_subject = skipped_other = failed = 0
 
-    def progress_callback(received_bytes, total_bytes):
-        if total_bytes:
-            percentage = (received_bytes / total_bytes) * 100
-            # Avoid printing the same integer percentage repeatedly.
-            if int(percentage) % 25 == 0:
-                print(f" -> Download Progress: {percentage:.1f}%")
+        async for message in client.iter_messages(entity, reverse=True):
+            scanned += 1
 
-    async for message in client.iter_messages(channel_id):
-        scanned += 1
+            if MAX_FILES and downloaded >= MAX_FILES:
+                break
 
-        is_video = message.video is not None
-        is_pdf = bool(
-            message.document
-            and message.document.mime_type
-            and message.document.mime_type.lower() == 'application/pdf'
-        )
+            file_type = detect_file_type(message)
+            if file_type is None:
+                skipped_other += 1
+                continue
 
-        # Ignore everything except videos and PDFs.
-        if not (is_video or is_pdf):
-            continue
+            # IMPORTANT: classify before downloading.
+            subject = classify_subject(message)
+            if subject is None:
+                skipped_subject += 1
+                logger.info("[%s] SKIP [NO ALLOWED SUBJECT] [%s] %s", message.id, file_type, original_filename(message))
+                continue
 
-        subject = classify_message(message)
-        if subject is None:
-            skipped_subject += 1
-            continue
+            target_dir = destination(subject, file_type)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            filename = build_filename(message)
+            output_path = target_dir / filename
 
-        selected += 1
+            logger.info("[%s] [%s] [%s] %s", message.id, subject, file_type, filename)
 
-        extension = message.file.ext if message.file and message.file.ext else (
-            '.mp4' if is_video else '.pdf'
-        )
+            # This is only a local filesystem check. There is NO Drive check.
+            if output_path.exists() and output_path.stat().st_size > 0:
+                logger.info("[%s] SKIP [LOCAL FILE EXISTS] %s", message.id, filename)
+                continue
 
-        if message.file and message.file.name:
-            base_name, _ = os.path.splitext(message.file.name)
-        else:
-            base_name = "file"
+            if await download_file(client, message, output_path):
+                downloaded += 1
+            else:
+                failed += 1
 
-        # Clean filename while preserving useful words from the original title.
-        base_name = "".join(
-            c for c in base_name
-            if c.isalpha() or c.isdigit() or c in ' _-'
-        ).strip()
+            await asyncio.sleep(DOWNLOAD_DELAY)
 
-        if not base_name:
-            base_name = subject
-
-        file_name = f"{base_name}_msg_{message.id}{extension}"
-        full_path = os.path.join(save_path, file_name)
-
-        if os.path.exists(full_path) :
-            print(f"[{selected}] Skipping [{subject}]: {file_name} already exists.")
-            continue
-
-        file_type = "Video" if is_video else "PDF"
-        print(f"[{selected}] Downloading [{subject} / {file_type}]: {file_name}")
-
-        max_retries = 5
-        attempt = 0
-        download_success = False
-
-        while attempt < max_retries and not download_success:
-            try:
-                if not client.is_connected():
-                    print("Restoring dropped Telegram connection...")
-                    await client.connect()
-
-                await client.download_media(
-                    message,
-                    file=full_path,
-                    progress_callback=progress_callback,
-                    request_size=1024 * 1024
-                )
-
-                print(f"Successfully downloaded: {file_name}")
-                download_success = True
-                await asyncio.sleep(2)
-
-            except Exception as ce:
-                attempt += 1
-                wait_time = attempt * 20
-                print(
-                    f"⚠️ Telegram error ({type(ce).__name__}: {ce}). "
-                    f"Retrying {attempt}/{max_retries} in {wait_time}s..."
-                )
-
-                if os.path.exists(full_path):
-                    os.remove(full_path)
-
-                await asyncio.sleep(wait_time)
-
-        if not download_success:
-            print(f"💥 Permanent drop: {file_name} after {max_retries} failed attempts.")
-
-    print("\n========== JOB SUMMARY ==========")
-    print(f"Messages scanned:       {scanned}")
-    print(f"Matching files found:  {selected}")
-    print(f"Non-matching skipped:   {skipped_subject}")
-    print("Allowed subjects:       Physics, Chemistry, Biology, Static GK")
-    print("=================================")
-
-    await client.disconnect()
+        logger.info("=" * 70)
+        logger.info("SCAN COMPLETE")
+        logger.info("Messages scanned : %d", scanned)
+        logger.info("Downloaded       : %d", downloaded)
+        logger.info("No subject       : %d", skipped_subject)
+        logger.info("Other skipped    : %d", skipped_other)
+        logger.info("Failed           : %d", failed)
+        logger.info("Google Drive     : NOT CHECKED")
+        logger.info("=" * 70)
+    finally:
+        await client.disconnect()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
