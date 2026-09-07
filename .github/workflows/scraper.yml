@@ -60,7 +60,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="./downloads/Telegram_Archive/GK-GS/parmar_ssc"
+          ROOT="./downloads/Telegram_Archive/GK-GS"
 
           echo "Local archive: $ROOT"
           if [ ! -d "$ROOT" ]; then
@@ -69,7 +69,7 @@ jobs:
           fi
 
           echo "Downloaded files:"
-          find "$ROOT" -type f -not -name '.DS_Store' -print
+          find "$ROOT" -type f -not -name '.DS_Store' -not -name '.download_manifest.json' -print
 
           echo "File counts by type:"
           find "$ROOT" -type f \( -iname '*.mp4' -o -iname '*.mkv' -o -iname '*.avi' -o -iname '*.mov' -o -iname '*.webm' -o -iname '*.m4v' -o -iname '*.3gp' \) | wc -l | xargs echo "Videos:"
@@ -80,8 +80,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          LOCAL_ROOT="./downloads/Telegram_Archive/GK-GS/parmar_ssc"
-          REMOTE_ROOT="gdrive1:Telegram_Archive/GK-GS/parmar_ssc"
+          LOCAL_ROOT="./downloads/Telegram_Archive/GK-GS"
+          REMOTE_ROOT="gdrive1:Telegram_Archive/GK-GS"
 
           echo "=============================================="
           echo "Uploading Telegram archive to Google Drive"
@@ -89,8 +89,8 @@ jobs:
           echo "Remote: $REMOTE_ROOT"
           echo "=============================================="
 
-          # Upload files only. No Drive duplicate/existence check is performed
-          # by main.py. Rclone handles the actual transfer.
+          # Upload files only. No Google Drive existence check is performed by main.py.
+          # Rclone handles the actual transfer.
           rclone copy "$LOCAL_ROOT" "$REMOTE_ROOT" \
             --create-empty-src-dirs \
             --progress \
@@ -105,7 +105,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          REMOTE_ROOT="gdrive1:Telegram_Archive/GK-GS/parmar_ssc"
+          REMOTE_ROOT="gdrive1:Telegram_Archive/GK-GS"
 
           echo "Google Drive archive listing:"
           rclone size "$REMOTE_ROOT"
