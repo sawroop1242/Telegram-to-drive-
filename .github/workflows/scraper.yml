@@ -37,7 +37,7 @@ jobs:
         run: |
           mkdir -p ~/.config/rclone
           cat << EOF > ~/.config/rclone/rclone.conf
-          [gdrive1]
+          [gdrive]
           type = drive
           scope = drive
           token = $RCLONE_CONF_JSON
