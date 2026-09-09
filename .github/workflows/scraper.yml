@@ -1,88 +1,61 @@
 name: Telegram to GDrive Archiver
 
+# This allows you to trigger the script manually from the Actions tab
 on:
   workflow_dispatch:
 
 jobs:
   scrape_and_upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-
+    
+    # Pass our hidden secrets into the server environment
     env:
       API_ID: ${{ secrets.API_ID }}
       API_HASH: ${{ secrets.API_HASH }}
       TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
       RCLONE_CONF_JSON: ${{ secrets.RCLONE_CONF }}
-      RCLONE_REMOTE_ROOT: gdrive1:Telegram_Archive/GK-GS
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: Install Python Dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install telethon cryptg
 
-      - name: Install Rclone
+      - name: Install Rclone and FUSE
         run: |
           sudo apt-get update
-          sudo apt-get install -y rclone
-          rclone version
+          sudo apt-get install -y rclone fuse3
 
-      - name: Configure Rclone gdrive1
-        shell: bash
+      - name: Configure Rclone Connection
         run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.config/rclone"
-          cat > "$HOME/.config/rclone/rclone.conf" <<EOF
-          [gdrive1]
+          mkdir -p ~/.config/rclone
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [gdrive]
           type = drive
           scope = drive
-          token = ${RCLONE_CONF_JSON}
+          token = $RCLONE_CONF_JSON
           EOF
 
-          echo "Configured remotes:"
-          rclone listremotes
-
-          echo "Testing gdrive1 connection..."
-          rclone about gdrive1:
-
-      - name: Run Parallel Telegram Scraper
+      - name: Mount Google Drive
         run: |
-          python parallel_runner.py
+          # Replicate the Colab folder structure
+          sudo mkdir -p /content/drive/MyDrive
+          sudo chown -R $USER:$USER /content
+          
+          # Mount the drive in the background via daemon
+          rclone mount gdrive: /content/drive/MyDrive --daemon --vfs-cache-mode writes
+          
+          # Give it a few seconds to establish the connection
+          sleep 5 
 
-      - name: Verify Downloaded Archive
-        shell: bash
+      - name: Run Telegram Scraper
         run: |
-          set -euo pipefail
-          ROOT="./downloads/Telegram_Archive/GK-GS"
-
-          echo "Local archive: $ROOT"
-          if [ ! -d "$ROOT" ]; then
-            echo "ERROR: archive directory does not exist"
-            exit 1
-          fi
-
-          echo "Downloaded files:"
-          find "$ROOT" -type f -not -name '.DS_Store' -not -name '.download_manifest.json' -not -name '*.part' -print
-
-          echo "File counts by type:"
-          find "$ROOT" -type f \( -iname '*.mp4' -o -iname '*.mkv' -o -iname '*.avi' -o -iname '*.mov' -o -iname '*.webm' -o -iname '*.m4v' -o -iname '*.3gp' \) | wc -l | xargs echo "Videos:"
-          find "$ROOT" -type f -iname '*.pdf' | wc -l | xargs echo "PDFs:"
-
-      - name: Verify Google Drive Uploads
-        shell: bash
-        run: |
-          set -euo pipefail
-          REMOTE_ROOT="gdrive1:Telegram_Archive/GK-GS"
-
-          echo "Google Drive archive summary:"
-          rclone size "$REMOTE_ROOT"
-          rclone lsd "$REMOTE_ROOT" || true
-          echo "Parallel per-file upload workflow completed."
+          python main.py
+          
