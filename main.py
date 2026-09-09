@@ -25,7 +25,7 @@ CHANNEL_ID = -1003708183148
 ARCHIVE_ROOT = Path("./downloads/Telegram_Archive/GK-GS")
 RCLONE_REMOTE_ROOT = os.environ.get(
     "RCLONE_REMOTE_ROOT",
-    "gdrive1:Telegram_Archive/GK-GS",
+    "gdrive:Telegram_Archive/GK-GS",
 )
 
 # Telegram download retry settings.
