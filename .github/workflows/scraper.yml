@@ -37,7 +37,7 @@ jobs:
         run: |
           mkdir -p ~/.config/rclone
           cat << EOF > ~/.config/rclone/rclone.conf
-          [gdrive1]
+          [gdrive]
           type = drive
           scope = drive
           token = $RCLONE_CONF_JSON
@@ -50,7 +50,7 @@ jobs:
           sudo chown -R $USER:$USER /content
           
           # Mount the drive in the background via daemon
-          rclone mount gdrive1: /content/drive/MyDrive --daemon --vfs-cache-mode writes
+          rclone mount gdrive: /content/drive/MyDrive --daemon --vfs-cache-mode writes
           
           # Give it a few seconds to establish the connection
           sleep 5 
