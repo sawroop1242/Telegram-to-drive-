@@ -47,9 +47,6 @@ jobs:
 
           chmod 600 "$HOME/.config/rclone/rclone.conf"
 
-          echo "Checking Google Drive connection..."
-          rclone about gdrive:
-
       - name: Prepare Colab-compatible local folder structure
         run: |
           set -euo pipefail
