@@ -12,7 +12,7 @@ session_string = os.environ['TELEGRAM_SESSION']
 channel_id = -1003708183148
 
 # Base storage path
-base_save_path = '/content/drive/MyDrive/Telegram_Archive/Maths/spartan/'
+base_save_path = '/content/drive/MyDrive/Telegram_Archive/parmar_ssc/new/'
 
 # Target subjects to check for in the filename
 subjects = ["physics", "chemistry", "ancient history", "midelve history", "medieval history"]
