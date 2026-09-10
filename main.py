@@ -18,9 +18,8 @@ base_save_path = '/content/drive/MyDrive/Telegram_Archive/GK_GS/'
 
 # Hardcoded target lists mapping subjects to their specific message IDs
 target_downloads = {
-    "Physics":[1193,1197,1201,1204,1223,1228,1249,1249],
-    "Chemistry":[1122,1123,1123],
-    "Biology": [1035, 1038, 1043, 1048, 1051, 1053, 1059, 1063, 1066, 1070, 1076, 1080, 1082]
+    
+    "Biology": [1043,1048,1051,1053,1059,1063,1066,1070,1076,1080,1082]
 }
 
 async def main():
