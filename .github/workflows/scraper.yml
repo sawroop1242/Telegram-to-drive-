@@ -47,17 +47,18 @@ jobs:
 
           chmod 600 "$HOME/.config/rclone/rclone.conf"
 
-      - name: Prepare Colab-compatible local folder structure
+      - name: Mount Google Drive
         run: |
-          set -euo pipefail
-          # The Python application uses ./downloads/Telegram_Archive/GK-GS.
-          # A Google Drive FUSE mount is NOT required because main.py uploads
-          # completed files directly with rclone copyto.
-          mkdir -p ./downloads/Telegram_Archive/GK-GS
-          echo "Local archive root: $(pwd)/downloads/Telegram_Archive/GK-GS"
-          test -d ./downloads/Telegram_Archive/GK-GS
+          # Replicate the Colab folder structure
+          sudo mkdir -p /content/drive/MyDrive
+          sudo chown -R $USER:$USER /content
+          
+          # Mount the drive in the background via daemon
+          rclone mount gdrive: /content/drive/MyDrive --daemon --vfs-cache-mode writes
+          
+          # Give it a few seconds to establish the connection
+          sleep 5 
 
       - name: Run Telegram Scraper
         run: |
-          set -euo pipefail
           python main.py
