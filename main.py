@@ -39,7 +39,7 @@ async def main():
     print(f"Connected! Target channel ID: {channel_id}")
     
     # Flatten our dictionary into a job list to process sequentially
-    jobs =
+    jobs = []
     for subject, msg_ids in target_downloads.items():
         for msg_id in msg_ids:
             jobs.append((subject, msg_id))
