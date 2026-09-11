@@ -1,0 +1,48 @@
+name: Manual Live Stream Archiver
+
+on:
+  workflow_dispatch:
+    inputs:
+      stream_url:
+        description: 'Paste YouTube Stream Link'
+        required: true
+        type: string
+      gdrive_folder:
+        description: 'Target Google Drive Folder Path'
+        required: true
+        default: 'mydrive:Telegram_Archive/Live_Streams/'
+        type: string
+
+jobs:
+  archive_stream:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository Code
+      uses: actions/checkout@v4
+
+    - name: Setup Python Environment
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install System Dependencies & Archiving Engines
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        python -m pip install --upgrade pip
+        pip install yt-dlp
+        curl https://rclone.org | sudo bash
+
+    - name: Configure Rclone Drive Session Authenticators
+      run: |
+        mkdir -p ~/.config/rclone
+        echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+
+    - name: Execute Stream Capture Loop
+      env:
+        STREAM_LINK: ${{ inputs.stream_url }}
+        GDRIVE_DESTINATION: ${{ inputs.gdrive_folder }}
+      run: |
+        python stream_processor.py
+
