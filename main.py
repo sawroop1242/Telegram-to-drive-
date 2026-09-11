@@ -29,7 +29,7 @@ os.makedirs(LOCAL_TEMP_DIR, exist_ok=True)
 
 # Massive range array targeting 946 continuous index links
 target_downloads = {
-    "Maths": [i for i in range(5001, 5507)]
+    "Maths": [ 4773, 4774, 4563, 4633, 4681, 4715, 4736, 4737]
 }
 
 async def main():
