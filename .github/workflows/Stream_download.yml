@@ -30,16 +30,15 @@ jobs:
 
     - name: Configure Rclone Connection
       env:
-        
         RCLONE_CONF_JSON: ${{ vars.RCLONE_CONF }}
       run: |
         mkdir -p ~/.config/rclone
-        # Compiles the required structural parameters into memory dynamically
-        cat << EOF > ~/.config/rclone/rclone.conf
+        # CRITICAL FIX: Wrapped 'EOF' in single quotes to protect inner JSON layout structure
+        cat << 'EOF' > ~/.config/rclone/rclone.conf
         [gdrive]
         type = drive
         scope = drive
-        token = "$RCLONE_CONF_JSON"
+        token = $RCLONE_CONF_JSON
         EOF
 
     - name: Mount Google Drive
