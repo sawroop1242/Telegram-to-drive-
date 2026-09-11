@@ -13,7 +13,7 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger("TelegramArchiver")
-
+logging.getLogger('telethon').setLevel(logging.WARNING)
 # --- Configuration (Pulled from GitHub Secrets) ---
 api_id = int(os.environ['API_ID'])
 api_hash = os.environ['API_HASH']
