@@ -37,7 +37,7 @@ jobs:
     - name: Configure Rclone Drive Session Authenticators
       run: |
         mkdir -p ~/.config/rclone
-        echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+        echo "${{ vars.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
 
     - name: Execute Stream Capture Loop
       env:
