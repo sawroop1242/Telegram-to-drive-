@@ -7,11 +7,6 @@ on:
         description: 'Paste YouTube Stream Link'
         required: true
         type: string
-      gdrive_folder:
-        description: 'Target Google Drive Folder Path'
-        required: true
-        default: 'mydrive:Telegram_Archive/Live_Streams/'
-        type: string
 
 jobs:
   archive_stream:
@@ -29,20 +24,39 @@ jobs:
     - name: Install System Dependencies & Archiving Engines
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        sudo apt-get install -y ffmpeg rclone fuse3
         python -m pip install --upgrade pip
         pip install yt-dlp
-        curl https://rclone.org | sudo bash
 
-    - name: Configure Rclone Drive Session Authenticators
+    - name: Configure Rclone Connection
+      env:
+        # Securely maps your repository secret containing only the raw refresh token string
+        GDRIVE_TOKEN_SECRET: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
       run: |
         mkdir -p ~/.config/rclone
-        echo "${{ vars.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+        # Compiles the required structural parameters into memory dynamically
+        cat << EOF > ~/.config/rclone/rclone.conf
+        [gdrive]
+        type = drive
+        scope = drive
+        token = "$RCLONE_CONF"
+        EOF
+
+    - name: Mount Google Drive
+      run: |
+        # Replicate the Colab folder storage layout structure matching your script paths
+        sudo mkdir -p /content/drive/MyDrive
+        sudo chown -R $USER:$USER /content
+        
+        # Mount the remote cloud storage in the background as a background daemon
+        rclone mount gdrive: /content/drive/MyDrive --daemon --vfs-cache-mode writes
+        
+        # Pause execution briefly to let the mounting background pipeline establish connection links
+        sleep 5 
 
     - name: Execute Stream Capture Loop
       env:
         STREAM_LINK: ${{ inputs.stream_url }}
-        GDRIVE_DESTINATION: ${{ inputs.gdrive_folder }}
       run: |
         python stream_processor.py
-
+        
