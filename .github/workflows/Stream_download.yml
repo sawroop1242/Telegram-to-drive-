@@ -30,8 +30,8 @@ jobs:
 
     - name: Configure Rclone Connection
       env:
-        # Securely maps your repository secret containing only the raw refresh token string
-        GDRIVE_TOKEN_SECRET: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+        
+        RCLONE_CONF_JSON: ${{ vars.RCLONE_CONF }}
       run: |
         mkdir -p ~/.config/rclone
         # Compiles the required structural parameters into memory dynamically
@@ -39,7 +39,7 @@ jobs:
         [gdrive]
         type = drive
         scope = drive
-        token = "$RCLONE_CONF"
+        token = "$RCLONE_CONF_JSON"
         EOF
 
     - name: Mount Google Drive
