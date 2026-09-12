@@ -28,7 +28,7 @@ LOCAL_TEMP_DIR = '/content/telegram_tmp/'
 os.makedirs(LOCAL_TEMP_DIR, exist_ok=True)
 
 target_downloads = {
-    "Maths":  [i for i in range(5156, 5162)]
+    "Maths":  [i for i in range(5311, 5350)]
 }
 
 async def main():
