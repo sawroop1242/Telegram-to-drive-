@@ -21,7 +21,7 @@ api_id = int(os.environ['API_ID'])
 api_hash = os.environ['API_HASH']
 session_string = os.environ['TELEGRAM_SESSION']
 
-channel_id = -1003708183148  # Your target private channel ID
+channel_id = -1004303944698  # Your target private channel ID
 base_save_path = '/content/drive/MyDrive/Telegram_Archive/Maths/spartan/'
 
 LOCAL_TEMP_DIR = '/content/telegram_tmp/'
