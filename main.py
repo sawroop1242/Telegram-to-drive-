@@ -28,20 +28,18 @@ LOCAL_TEMP_DIR = '/content/telegram_tmp/'
 os.makedirs(LOCAL_TEMP_DIR, exist_ok=True)
 
 target_downloads = {
-    "Maths": [i for i in range(5156, 5162)]
+    "Maths":  [i for i in range(5156, 5162)]
 }
 
 async def main():
     logger.info("Starting connection to Telegram...")
     
-    # CRITICAL FIX: Configure connection tuning parameters to maximize download bandwidth
-    client = TelegramClient(
-        StringSession(session_string), 
-        api_id, 
-        api_hash,
-        request_delay=0,                 # Eliminates polling delay thresholds
-        max_concurrent_connections=4      # Enforces 4 parallel download channels for massive files
-    )
+    # Initialize the client with standard parameters
+    client = TelegramClient(StringSession(session_string), api_id, api_hash)
+    
+    # CRITICAL FIX: Unlock 4 parallel network connections across cross-DC servers
+    client.max_concurrent_connections = 4
+    
     await client.connect()
     
     if not await client.is_user_authorized():
@@ -90,7 +88,7 @@ async def main():
                         
                         logger.info(f"[DOWNLOAD] [ID: {message.id}] Starting {file_type} download: {file_name}")
                         
-                        # Download directly to the fast local container scratch space
+                        # Download directly to local fast container scratch storage
                         await client.download_media(message, file=local_path)
                         
                         if os.path.exists(local_path):
