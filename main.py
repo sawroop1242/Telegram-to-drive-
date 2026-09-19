@@ -28,8 +28,11 @@ LOCAL_TEMP_DIR = '/content/telegram_tmp/'
 os.makedirs(LOCAL_TEMP_DIR, exist_ok=True)
 
 target_downloads = {
-    "Maths":  [3171,5156,5160]
+    "Maths": [3171, 5156, 5160] + [i for i in range(3584, 3647)]
+    
 }
+
+    
 
 async def main():
     logger.info("Starting connection to Telegram...")
