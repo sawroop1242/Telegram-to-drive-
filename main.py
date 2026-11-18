@@ -28,10 +28,10 @@ api_id = int(os.environ['API_ID'])
 api_hash = os.environ['API_HASH']
 session_string = os.environ['TELEGRAM_SESSION']
 
-channel_id = -1003980679191
+channel_id = -1003828362340
 
 base_save_path = (
-    '/content/drive/MyDrive/Telegram_Archive/topper-batch/'
+    '/content/drive/MyDrive/Telegram_Archive/English by Parshant-solanki/'
 )
 
 LOCAL_TEMP_DIR = '/content/telegram_tmp/'
@@ -60,10 +60,9 @@ destination_locks = {}
 # ==========================================
 
 target_downloads = {
-    "Maths": list(range(11, 137)),
-    "English": list(range(140, 298)),
-    "Reasoning": list(range(303, 393)),
-    "Gk-GS": list(range(397, 514))
+    #https://t.me/prashantsirnotes/4 https://t.me/prashantsirnotes/86
+    "English": list(range(1, 87)),
+    
 }
 
 
