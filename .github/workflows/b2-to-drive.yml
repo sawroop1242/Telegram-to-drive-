@@ -1,3 +1,4 @@
+
 name: B2 to Google Drive
 
 on:
@@ -8,20 +9,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Install rclone
-        run: curl https://rclone.org/install.sh | sudo bash
+        run: |
+          curl https://rclone.org/install.sh | sudo bash
 
       - name: Configure rclone
+        env:
+          B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          GDRIVE_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
         run: |
           mkdir -p ~/.config/rclone
 
-          cat > ~/.config/rclone/rclone.conf << EOF
+          cat > ~/.config/rclone/rclone.conf <<EOF
           [b2]
           type = b2
-          account = ${{ secrets.B2_ACCOUNT_ID }}
-          key = ${{ secrets.B2_APPLICATION_KEY }}
+          account = ${B2_ACCOUNT_ID}
+          key = ${B2_APPLICATION_KEY}
 
           [gdrive]
           type = drive
@@ -29,11 +33,20 @@ jobs:
           service_account_file = /tmp/gdrive.json
           EOF
 
-          echo '${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}' > /tmp/gdrive.json
+          printf '%s' "$GDRIVE_JSON" > /tmp/gdrive.json
+          chmod 600 /tmp/gdrive.json
+
+      - name: Verify connections
+        run: |
+          rclone lsd b2:
+          rclone lsd gdrive:
 
       - name: Transfer
+        env:
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
         run: |
-          rclone copy b2:your-bucket gdrive:BackblazeBackup \
+          rclone copy "b2:${B2_BUCKET}" "gdrive:BackblazeBackup" \
             --transfers 8 \
             --checkers 16 \
-            --progress
+            --progress \
+            --stats 30s
