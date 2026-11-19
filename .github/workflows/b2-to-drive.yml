@@ -23,6 +23,8 @@ jobs:
           curl https://rclone.org/install.sh | sudo bash
           rclone version
 
+
+          
       - name: Configure rclone
         env:
           B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
@@ -32,36 +34,41 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Validate required credentials
+          # Reject missing or multiline B2 credentials
           test -n "$B2_ACCOUNT_ID"
           test -n "$B2_APPLICATION_KEY"
-          test -n "$GDRIVE_TOKEN"
+          [[ "$B2_ACCOUNT_ID" != *$'\n'* ]]
+          [[ "$B2_APPLICATION_KEY" != *$'\n'* ]]
 
-          # Validate and compact OAuth token JSON
-          TOKEN_JSON=$(printf '%s' "$GDRIVE_TOKEN" | jq -ce .)
-
-          # A refresh token is required for long-running backups
-          printf '%s' "$TOKEN_JSON" | jq -e '
+          # Validate OAuth JSON
+          printf '%s' "$GDRIVE_TOKEN" | jq -e '
+            type == "object" and
+            (.access_token | type == "string" and length > 0) and
             (.refresh_token | type == "string" and length > 0)
           ' >/dev/null
 
           mkdir -p "$HOME/.config/rclone"
           chmod 700 "$HOME/.config/rclone"
 
-          # Write rclone configuration
-          cat > "$HOME/.config/rclone/rclone.conf" <<EOF
-          [b2]
-          type = b2
-          account = ${B2_ACCOUNT_ID}
-          key = ${B2_APPLICATION_KEY}
+          # Build a proper rclone config using rclone's own config commands
+          export RCLONE_CONFIG_B2_TYPE=b2
+          export RCLONE_CONFIG_B2_ACCOUNT="$B2_ACCOUNT_ID"
+          export RCLONE_CONFIG_B2_KEY="$B2_APPLICATION_KEY"
 
-          [gdrive]
-          type = drive
-          scope = drive
-          token = ${TOKEN_JSON}
-          EOF
+          export RCLONE_CONFIG_GDRIVE_TYPE=drive
+          export RCLONE_CONFIG_GDRIVE_SCOPE=drive
+          export RCLONE_CONFIG_GDRIVE_TOKEN
+          RCLONE_CONFIG_GDRIVE_TOKEN="$(printf '%s' "$GDRIVE_TOKEN" | jq -c .)"
 
+          # Create an empty config file; environment variables provide credentials
+          : > "$HOME/.config/rclone/rclone.conf"
           chmod 600 "$HOME/.config/rclone/rclone.conf"
+
+          # Verify configuration parsing
+          rclone listremotes
+
+
+
 
 
       - name: Debug rclone configuration
