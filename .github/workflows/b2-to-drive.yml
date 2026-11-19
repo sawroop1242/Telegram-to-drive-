@@ -1,4 +1,3 @@
-
 name: Backblaze B2 to Google Drive
 
 on:
@@ -19,102 +18,101 @@ jobs:
 
     steps:
       - name: Install rclone
-        run: |
-          curl https://rclone.org/install.sh | sudo bash
-          rclone version
-
-
-          
-      - name: Configure rclone
-        env:
-          B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
-          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
-          GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+          curl --fail --silent --show-error https://rclone.org/install.sh | sudo bash
+          rclone version
 
-          # Reject missing or multiline B2 credentials
-          test -n "$B2_ACCOUNT_ID"
-          test -n "$B2_APPLICATION_KEY"
-          [[ "$B2_ACCOUNT_ID" != *$'\n'* ]]
-          [[ "$B2_APPLICATION_KEY" != *$'\n'* ]]
+      - name: Configure rclone
+        shell: bash
+        env:
+          B2_ACCOUNT_ID_INPUT: ${{ secrets.B2_ACCOUNT_ID }}
+          B2_APPLICATION_KEY_INPUT: ${{ secrets.B2_APPLICATION_KEY }}
+          GDRIVE_TOKEN_INPUT: ${{ secrets.GDRIVE_TOKEN }}
+        run: |
+          set -euo pipefail
 
-          # Validate OAuth JSON
-          printf '%s' "$GDRIVE_TOKEN" | jq -e '
-            type == "object" and
-            (.access_token | type == "string" and length > 0) and
-            (.refresh_token | type == "string" and length > 0)
-          ' >/dev/null
+          # GitHub secrets sometimes get pasted with leading/trailing newlines.
+          # Normalize those without ever printing the credential values.
+          B2_ACCOUNT_ID="$(printf '%s' "$B2_ACCOUNT_ID_INPUT" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+          B2_APPLICATION_KEY="$(printf '%s' "$B2_APPLICATION_KEY_INPUT" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+
+          if [[ -z "$B2_ACCOUNT_ID" ]]; then
+            echo "::error::GitHub Actions secret B2_ACCOUNT_ID is missing or empty. Set it to the Backblaze Application Key ID (keyID)."
+            exit 1
+          fi
+
+          if [[ -z "$B2_APPLICATION_KEY" ]]; then
+            echo "::error::GitHub Actions secret B2_APPLICATION_KEY is missing or empty."
+            exit 1
+          fi
+
+          if [[ -z "$GDRIVE_TOKEN_INPUT" ]]; then
+            echo "::error::GitHub Actions secret GDRIVE_TOKEN is missing or empty."
+            exit 1
+          fi
+
+          # Validate and compact the Google OAuth token; do not expose it in logs.
+          TOKEN_JSON="$(printf '%s' "$GDRIVE_TOKEN_INPUT" | jq -ce '
+            select(
+              type == "object" and
+              (.access_token | type == "string" and length > 0) and
+              (.refresh_token | type == "string" and length > 0)
+            )
+          ')" || {
+            echo "::error::GDRIVE_TOKEN must be the raw token.json JSON and include access_token and refresh_token."
+            exit 1
+          }
 
           mkdir -p "$HOME/.config/rclone"
           chmod 700 "$HOME/.config/rclone"
+          : > "$HOME/.config/rclone/rclone.conf"
+          chmod 600 "$HOME/.config/rclone/rclone.conf"
 
-          # Build a proper rclone config using rclone's own config commands
+          # Configure remotes via rclone's supported environment-variable interface.
           export RCLONE_CONFIG_B2_TYPE=b2
           export RCLONE_CONFIG_B2_ACCOUNT="$B2_ACCOUNT_ID"
           export RCLONE_CONFIG_B2_KEY="$B2_APPLICATION_KEY"
 
           export RCLONE_CONFIG_GDRIVE_TYPE=drive
           export RCLONE_CONFIG_GDRIVE_SCOPE=drive
-          export RCLONE_CONFIG_GDRIVE_TOKEN
-          RCLONE_CONFIG_GDRIVE_TOKEN="$(printf '%s' "$GDRIVE_TOKEN" | jq -c .)"
+          export RCLONE_CONFIG_GDRIVE_TOKEN="$TOKEN_JSON"
 
-          # Create an empty config file; environment variables provide credentials
-          : > "$HOME/.config/rclone/rclone.conf"
-          chmod 600 "$HOME/.config/rclone/rclone.conf"
-
-          # Verify configuration parsing
-          rclone listremotes
-
-
-
-
-
-      - name: Debug rclone configuration
-        shell: bash
-        run: |
-          echo "Checking rclone configuration..."
-
-          CONFIG="$HOME/.config/rclone/rclone.conf"
-
-          if [ ! -f "$CONFIG" ]; then
-            echo "Config file missing"
-            exit 1
-          fi
-
-          echo "Configuration sections:"
-          grep '^\[' "$CONFIG"
-
-          echo "Configuration keys:"
-          sed -E 's/^([[:space:]]*[^=]+)=.*/\1=[REDACTED]/' "$CONFIG"
-
-          echo "Testing configuration:"
+          echo "Checking configured remotes (credentials are not displayed):"
           rclone listremotes
 
       - name: Verify Backblaze B2 connection
+        shell: bash
         env:
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
         run: |
           set -euo pipefail
-          test -n "$B2_BUCKET"
-          rclone lsd "b2:"
-          rclone lsf "b2:${B2_BUCKET}" --max-depth 1
+          B2_BUCKET="$(printf '%s' "$B2_BUCKET" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+          if [[ -z "$B2_BUCKET" ]]; then
+            echo "::error::GitHub Actions secret B2_BUCKET is missing or empty."
+            exit 1
+          fi
+          rclone lsd b2:
+          rclone lsf "b2:$B2_BUCKET" --max-depth 1
 
       - name: Verify Google Drive connection
+        shell: bash
         run: |
           set -euo pipefail
           rclone lsd gdrive:
           rclone about gdrive:
 
       - name: Transfer files
+        shell: bash
         env:
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
         run: |
           set -euo pipefail
+          B2_BUCKET="$(printf '%s' "$B2_BUCKET" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
 
           rclone copy \
-            "b2:${B2_BUCKET}" \
+            "b2:$B2_BUCKET" \
             "gdrive:BackblazeBackup" \
             --transfers 8 \
             --checkers 16 \
@@ -125,15 +123,15 @@ jobs:
             --log-level INFO
 
       - name: Verify backup
+        shell: bash
         env:
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
         run: |
           set -euo pipefail
-
-          echo "Checking source and destination..."
+          B2_BUCKET="$(printf '%s' "$B2_BUCKET" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
 
           rclone check \
-            "b2:${B2_BUCKET}" \
+            "b2:$B2_BUCKET" \
             "gdrive:BackblazeBackup" \
             --one-way \
             --size-only
@@ -142,5 +140,6 @@ jobs:
 
       - name: Cleanup credentials
         if: always()
+        shell: bash
         run: |
           rm -f "$HOME/.config/rclone/rclone.conf"
