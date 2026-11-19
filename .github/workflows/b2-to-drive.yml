@@ -70,14 +70,19 @@ jobs:
           : > "$HOME/.config/rclone/rclone.conf"
           chmod 600 "$HOME/.config/rclone/rclone.conf"
 
-          # Configure remotes via rclone's supported environment-variable interface.
-          export RCLONE_CONFIG_B2_TYPE=b2
-          export RCLONE_CONFIG_B2_ACCOUNT="$B2_ACCOUNT_ID"
-          export RCLONE_CONFIG_B2_KEY="$B2_APPLICATION_KEY"
-
-          export RCLONE_CONFIG_GDRIVE_TYPE=drive
-          export RCLONE_CONFIG_GDRIVE_SCOPE=drive
-          export RCLONE_CONFIG_GDRIVE_TOKEN="$TOKEN_JSON"
+          # Write the remotes into rclone.conf so later steps can use them.
+          # (Exported env vars do not persist between GitHub Actions steps.)
+          {
+            echo "[b2]"
+            echo "type = b2"
+            echo "account = $B2_ACCOUNT_ID"
+            echo "key = $B2_APPLICATION_KEY"
+            echo
+            echo "[gdrive]"
+            echo "type = drive"
+            echo "scope = drive"
+            echo "token = $TOKEN_JSON"
+          } > "$HOME/.config/rclone/rclone.conf"
 
           echo "Checking configured remotes (credentials are not displayed):"
           rclone listremotes
