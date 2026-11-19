@@ -1,0 +1,32 @@
+      - name: Configure rclone
+        env:
+          B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
+        run: |
+          mkdir -p ~/.config/rclone
+
+          cat > ~/.config/rclone/rclone.conf <<EOF
+          [b2]
+          type = b2
+          account = ${B2_ACCOUNT_ID}
+          key = ${B2_APPLICATION_KEY}
+
+          [gdrive]
+          type = drive
+          scope = drive
+          token = ${GDRIVE_TOKEN}
+          EOF
+
+      - name: Verify Google Drive
+        run: rclone lsd gdrive:
+
+      - name: Transfer B2 to Google Drive
+        env:
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+        run: |
+          rclone copy "b2:${B2_BUCKET}" "gdrive:BackblazeBackup" \
+            --transfers 8 \
+            --checkers 16 \
+            --progress \
+            --stats 30s

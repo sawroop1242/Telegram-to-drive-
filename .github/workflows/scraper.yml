@@ -42,7 +42,7 @@ jobs:
           [gdrive]
           type = drive
           scope = drive
-          token = $RCLONE_CONF_JSON
+          token = {"access_token":"ya29.a0AehfTOmnlPrZrOpSxnos46zkFf3EbfaQrsAdAUZHSDa1WXSo1uffGGR8lB2r6T5HWNKETo4nLtjb_4Qfx51so7k80LLFlfcUsfMu3cCxnVclalz9ahu5yRMH-qtJN_Z8jeRzlo1aqKZW7YVirhNVvo8Hr_rukSyKSDn3StSUWVIta3bHdSjbaRJp7Ly3fZbQgBIsZYMaCgYKAWMSARcSFQHGX2MiQgH96Z-VyCUQv9Tlpt5VEA0206","token_type":"Bearer","refresh_token":"1//0gy8mBt8W8OJeCgYIARAAGBASSQF-L9IrSocnW7Nca0gxlr08WL9uPWu9X6KQRXiopVm_gzmMk7iy7m97TeMfuEMuMSnF7vhwJ9Lb8WycMEmgwCENSvXXqhcOEAY","expiry":"2026-11-18T10:48:57.0728336+05:30","expires_in":3599}
           EOF
 
           chmod 600 "$HOME/.config/rclone/rclone.conf"
