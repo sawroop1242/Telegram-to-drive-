@@ -1,23 +1,8 @@
-
-name: B2 to Google Drive
-
-on:
-  workflow_dispatch:
-
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Install rclone
-        run: |
-          curl https://rclone.org/install.sh | sudo bash
-
       - name: Configure rclone
         env:
           B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
-          GDRIVE_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
         run: |
           mkdir -p ~/.config/rclone
 
@@ -30,18 +15,13 @@ jobs:
           [gdrive]
           type = drive
           scope = drive
-          service_account_file = /tmp/gdrive.json
+          token = ${GDRIVE_TOKEN}
           EOF
 
-          printf '%s' "$GDRIVE_JSON" > /tmp/gdrive.json
-          chmod 600 /tmp/gdrive.json
+      - name: Verify Google Drive
+        run: rclone lsd gdrive:
 
-      - name: Verify connections
-        run: |
-          rclone lsd b2:
-          rclone lsd gdrive:
-
-      - name: Transfer
+      - name: Transfer B2 to Google Drive
         env:
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
         run: |
