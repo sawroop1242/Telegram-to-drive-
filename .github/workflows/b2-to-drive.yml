@@ -1,12 +1,55 @@
+
+name: Backblaze B2 to Google Drive
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: b2-to-google-drive
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Transfer B2 to Google Drive
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Install rclone
+        run: |
+          curl https://rclone.org/install.sh | sudo bash
+          rclone version
+
       - name: Configure rclone
         env:
           B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
           GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
+        shell: bash
         run: |
-          mkdir -p ~/.config/rclone
+          set -euo pipefail
 
-          cat > ~/.config/rclone/rclone.conf <<EOF
+          # Validate required credentials
+          test -n "$B2_ACCOUNT_ID"
+          test -n "$B2_APPLICATION_KEY"
+          test -n "$GDRIVE_TOKEN"
+
+          # Validate and compact OAuth token JSON
+          TOKEN_JSON=$(printf '%s' "$GDRIVE_TOKEN" | jq -ce .)
+
+          # A refresh token is required for long-running backups
+          printf '%s' "$TOKEN_JSON" | jq -e '
+            (.refresh_token | type == "string" and length > 0)
+          ' >/dev/null
+
+          mkdir -p "$HOME/.config/rclone"
+          chmod 700 "$HOME/.config/rclone"
+
+          # Write rclone configuration
+          cat > "$HOME/.config/rclone/rclone.conf" <<EOF
           [b2]
           type = b2
           account = ${B2_ACCOUNT_ID}
@@ -15,18 +58,60 @@
           [gdrive]
           type = drive
           scope = drive
-          token = ${GDRIVE_TOKEN}
+          token = ${TOKEN_JSON}
           EOF
 
-      - name: Verify Google Drive
-        run: rclone lsd gdrive:
+          chmod 600 "$HOME/.config/rclone/rclone.conf"
 
-      - name: Transfer B2 to Google Drive
+      - name: Verify Backblaze B2 connection
         env:
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
         run: |
-          rclone copy "b2:${B2_BUCKET}" "gdrive:BackblazeBackup" \
+          set -euo pipefail
+          test -n "$B2_BUCKET"
+          rclone lsd "b2:"
+          rclone lsf "b2:${B2_BUCKET}" --max-depth 1
+
+      - name: Verify Google Drive connection
+        run: |
+          set -euo pipefail
+          rclone lsd gdrive:
+          rclone about gdrive:
+
+      - name: Transfer files
+        env:
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+        run: |
+          set -euo pipefail
+
+          rclone copy \
+            "b2:${B2_BUCKET}" \
+            "gdrive:BackblazeBackup" \
             --transfers 8 \
             --checkers 16 \
             --progress \
-            --stats 30s
+            --stats 30s \
+            --retries 5 \
+            --low-level-retries 10 \
+            --log-level INFO
+
+      - name: Verify backup
+        env:
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+        run: |
+          set -euo pipefail
+
+          echo "Checking source and destination..."
+
+          rclone check \
+            "b2:${B2_BUCKET}" \
+            "gdrive:BackblazeBackup" \
+            --one-way \
+            --size-only
+
+          echo "Backup verification completed."
+
+      - name: Cleanup credentials
+        if: always()
+        run: |
+          rm -f "$HOME/.config/rclone/rclone.conf"
