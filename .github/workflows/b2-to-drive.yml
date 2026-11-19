@@ -63,6 +63,28 @@ jobs:
 
           chmod 600 "$HOME/.config/rclone/rclone.conf"
 
+
+      - name: Debug rclone configuration
+        shell: bash
+        run: |
+          echo "Checking rclone configuration..."
+
+          CONFIG="$HOME/.config/rclone/rclone.conf"
+
+          if [ ! -f "$CONFIG" ]; then
+            echo "Config file missing"
+            exit 1
+          fi
+
+          echo "Configuration sections:"
+          grep '^\[' "$CONFIG"
+
+          echo "Configuration keys:"
+          sed -E 's/^([[:space:]]*[^=]+)=.*/\1=[REDACTED]/' "$CONFIG"
+
+          echo "Testing configuration:"
+          rclone listremotes
+
       - name: Verify Backblaze B2 connection
         env:
           B2_BUCKET: ${{ secrets.B2_BUCKET }}
